@@ -14,8 +14,8 @@ static uint64_t last_purge;
 static uint64_t start_time;
 static bool signal_exit = false;
 
-static const int32_t audio_bitrate = 48;
-static const int32_t video_bitrate = 5000;
+static const int32_t audio_bitrate = 20;
+static const int32_t video_bitrate = 700;
 static const char *data_filename = "savedata.tox";
 
 static Tox *g_tox = NULL;
