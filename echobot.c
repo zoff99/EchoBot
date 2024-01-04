@@ -14,6 +14,8 @@ static uint64_t last_purge;
 static uint64_t start_time;
 static bool signal_exit = false;
 
+#define PROXY_PORT_TOR_DEFAULT 9050
+
 static const int32_t audio_bitrate = 20;
 static const int32_t video_bitrate = 700;
 static const char *data_filename = "savedata.tox";
@@ -325,6 +327,46 @@ int main(int argc, char *argv[])
 	struct Tox_Options options;
 	tox_options_default(&options);
 
+    // ----------------------------------------------
+    // uint16_t tcp_port = 33445; // act as TCP relay
+    uint16_t tcp_port = 0; // DON'T act as TCP relay
+    // ----------------------------------------------
+
+    int use_tor = 1;
+
+    if ( use_tor == 0)
+    {
+        options.udp_enabled = true; // UDP mode
+        printf("setting UDP mode\n");
+    }
+    else
+    {
+        options.udp_enabled = false; // TCP mode
+        printf("setting TCP mode\n");
+    }
+    options.ipv6_enabled = true;
+    options.local_discovery_enabled = true;
+    options.hole_punching_enabled = true;
+    options.tcp_port = tcp_port;
+
+    if (use_tor == 1)
+    {
+        printf("setting Tor Relay mode\n");
+        options.udp_enabled = false; // TCP mode
+        printf("setting TCP mode\n");
+        const char *proxy_host = "127.0.0.1";
+        printf("setting proxy_host %s\n", proxy_host);
+        uint16_t proxy_port = PROXY_PORT_TOR_DEFAULT;
+        printf("setting proxy_port %d\n", (int)proxy_port);
+        options.proxy_type = TOX_PROXY_TYPE_SOCKS5;
+        options.proxy_host = proxy_host;
+        options.proxy_port = proxy_port;
+    }
+    else
+    {
+        options.proxy_type = TOX_PROXY_TYPE_NONE;
+    }
+
 	if (file_exists(data_filename)) {
 		if (load_profile(&g_tox, &options)) {
 			printf("Loaded data from disk\n");
@@ -362,15 +404,20 @@ int main(int argc, char *argv[])
 	tox_self_set_name(g_tox, (uint8_t *)name, strlen(name), NULL);
 	tox_self_set_status_message(g_tox, (uint8_t *)status_msg, strlen(status_msg), NULL);
 
-	const char *key_hex = "10C00EB250C3233E343E2AEBA07115A5C28920E9C8D29492F6D00B29049EDC7E";
+	const char *key_hex = "CD133B521159541FB1D326DE9850F5E56A6C724B5B8E5EB5CD8D950408E95707";
 	uint8_t key_bin[TOX_PUBLIC_KEY_SIZE];
 	sodium_hex2bin(key_bin, sizeof(key_bin), key_hex, strlen(key_hex), NULL, NULL, NULL);
 
 	TOX_ERR_BOOTSTRAP err3;
-	tox_bootstrap(g_tox, "tox.abilinski.com", 33445, key_bin, &err3);
+
+	tox_bootstrap(g_tox, "46.101.197.175", 33445, key_bin, &err3);
 	if (err3 != TOX_ERR_BOOTSTRAP_OK) {
 		printf("Could not bootstrap, error: %d\n", err3);
 		return -1;
+	}
+	tox_add_tcp_relay(g_tox, "46.101.197.175", 33445, key_bin, &err3); // use as TCP relay
+	if (err3 != TOX_ERR_BOOTSTRAP_OK) {
+		printf("Warning: Could not add tcp relay, error: %d\n", err3);
 	}
 
 	TOXAV_ERR_NEW err2;
