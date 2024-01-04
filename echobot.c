@@ -332,7 +332,7 @@ int main(int argc, char *argv[])
     uint16_t tcp_port = 0; // DON'T act as TCP relay
     // ----------------------------------------------
 
-    int use_tor = 1;
+    int use_tor = 0;
 
     if ( use_tor == 0)
     {
