@@ -58,7 +58,7 @@ jobs:
         run: |
           cp ./echobot echobot_nightly
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: echobot_nightly
           path: echobot_nightly
