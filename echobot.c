@@ -404,18 +404,18 @@ int main(int argc, char *argv[])
 	tox_self_set_name(g_tox, (uint8_t *)name, strlen(name), NULL);
 	tox_self_set_status_message(g_tox, (uint8_t *)status_msg, strlen(status_msg), NULL);
 
-	const char *key_hex = "CD133B521159541FB1D326DE9850F5E56A6C724B5B8E5EB5CD8D950408E95707";
+	const char *key_hex = "B3E5FA80DC8EBD1149AD2AB35ED8B85BD546DEDE261CA593234C619249419506";
 	uint8_t key_bin[TOX_PUBLIC_KEY_SIZE];
 	sodium_hex2bin(key_bin, sizeof(key_bin), key_hex, strlen(key_hex), NULL, NULL, NULL);
 
 	TOX_ERR_BOOTSTRAP err3;
 
-	tox_bootstrap(g_tox, "46.101.197.175", 33445, key_bin, &err3);
+	tox_bootstrap(g_tox, "tox1.mf-net.eu", 33445, key_bin, &err3);
 	if (err3 != TOX_ERR_BOOTSTRAP_OK) {
 		printf("Could not bootstrap, error: %d\n", err3);
 		return -1;
 	}
-	tox_add_tcp_relay(g_tox, "46.101.197.175", 33445, key_bin, &err3); // use as TCP relay
+	tox_add_tcp_relay(g_tox, "tox1.mf-net.eu", 33445, key_bin, &err3); // use as TCP relay
 	if (err3 != TOX_ERR_BOOTSTRAP_OK) {
 		printf("Warning: Could not add tcp relay, error: %d\n", err3);
 	}
