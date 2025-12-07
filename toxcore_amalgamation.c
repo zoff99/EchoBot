@@ -2777,6 +2777,12 @@ void kill_tcp_connections(TCP_Connections *tcp_c);
 non_null()
 char *tcp_copy_all_connected_relays(const TCP_Connections *tcp_c, char* relays_report_string, uint16_t max_num, uint32_t* num);
 
+non_null()
+TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int connections_number);
+
+non_null()
+TCP_con *get_tcp_connection(const TCP_Connections *tcp_c, int tcp_connections_number);
+
 #endif
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright © 2016-2018 The TokTok team.
@@ -3193,6 +3199,8 @@ char *copy_all_connected_relays(Net_Crypto *c, char* relays_report_string, uint1
 
 non_null()
 char *copy_all_udp_connections(Net_Crypto *c, char *connections_report_string, uint16_t max_num, uint32_t* num);
+
+void copy_friend_ip_port(Net_Crypto *c, const int crypt_conn_id, char *report_string, bool direct_connected);
 
 non_null()
 char *udp_copy_all_connected(IP_Port conn_ip_port, char *connections_report_string, uint16_t max_num, uint32_t* num);
@@ -4211,6 +4219,8 @@ typedef struct GC_Chat {
 
     uint8_t     m_group_public_key[CRYPTO_PUBLIC_KEY_SIZE];  // public key for group's messenger friend connection
     int         friend_connection_id;  // identifier for group's messenger friend connection
+
+    bool        flag_exit;  // true if the group will be deleted after the next do_gc() iteration
 } GC_Chat;
 
 #ifndef MESSENGER_DEFINED
@@ -4294,7 +4304,8 @@ int unpack_gc_saved_peers(GC_Chat *chat, const uint8_t *data, uint16_t length);
 
 /** @brief Packs all valid entries from saved peerlist into `data`.
  *
- * If `processed` is non-null it will be set to the length of the packed data.
+ * If `processed` is non-null it will be set to the length of the packed data
+ * on success, and will be untouched on error.
  *
  * Return the number of packed saved peers on success.
  * Return -1 if buffer is too small.
@@ -4763,30 +4774,9 @@ void lendian_bytes_to_host16(uint16_t *dest, const uint8_t *lendian);
 #endif
 
 #endif // C_TOXCORE_TOXCORE_STATE_H
-/*
-The MIT License (MIT)
-
-Copyright (c) 2020 Charles Gunyon
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
+/* SPDX-License-Identifier: MIT
+ * Copyright © 2020-2024 Charles Gunyon.
+ */
 #ifndef CMP_H_INCLUDED
 #define CMP_H_INCLUDED
 
@@ -4794,12 +4784,11 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdint.h>
 
-struct cmp_ctx_s;
+typedef struct cmp_ctx_s cmp_ctx_t;
 
-typedef bool   (*cmp_reader)(struct cmp_ctx_s *ctx, void *data, size_t limit);
-typedef bool   (*cmp_skipper)(struct cmp_ctx_s *ctx, size_t count);
-typedef size_t (*cmp_writer)(struct cmp_ctx_s *ctx, const void *data,
-                                                    size_t count);
+typedef bool   cmp_reader(cmp_ctx_t *ctx, void *data, size_t limit);
+typedef bool   cmp_skipper(cmp_ctx_t *ctx, size_t count);
+typedef size_t cmp_writer(cmp_ctx_t *ctx, const void *data, size_t count);
 
 enum {
   CMP_TYPE_POSITIVE_FIXNUM, /*  0 */
@@ -4844,7 +4833,7 @@ typedef struct cmp_ext_s {
   uint32_t size;
 } cmp_ext_t;
 
-union cmp_object_data_u {
+typedef union cmp_object_data_u {
   bool      boolean;
   uint8_t   u8;
   uint16_t  u16;
@@ -4863,19 +4852,19 @@ union cmp_object_data_u {
   uint32_t  str_size;
   uint32_t  bin_size;
   cmp_ext_t ext;
-};
+} cmp_object_data_t;
 
-typedef struct cmp_ctx_s {
+struct cmp_ctx_s {
   uint8_t      error;
   void        *buf;
-  cmp_reader   read;
-  cmp_skipper  skip;
-  cmp_writer   write;
-} cmp_ctx_t;
+  cmp_reader  *read;
+  cmp_skipper *skip;
+  cmp_writer  *write;
+};
 
 typedef struct cmp_object_s {
   uint8_t type;
-  union cmp_object_data_u as;
+  cmp_object_data_t as;
 } cmp_object_t;
 
 #ifdef __cplusplus
@@ -4899,9 +4888,9 @@ extern "C" {
  * If you don't intend to write, `write` may be NULL, but calling `*write*`
  * functions will crash; there is no check.
  */
-void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader read,
-                                         cmp_skipper skip,
-                                         cmp_writer write);
+void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader *read,
+                                         cmp_skipper *skip,
+                                         cmp_writer *write);
 
 /* Returns CMP's version */
 uint32_t cmp_version(void);
@@ -4910,7 +4899,7 @@ uint32_t cmp_version(void);
 uint32_t cmp_mp_version(void);
 
 /* Returns a string description of a CMP context's error */
-const char* cmp_strerror(cmp_ctx_t *ctx);
+const char* cmp_strerror(const cmp_ctx_t *ctx);
 
 /* Writes a signed integer to the backend */
 bool cmp_write_integer(cmp_ctx_t *ctx, int64_t d);
@@ -5128,37 +5117,6 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj);
 bool cmp_skip_object_no_limit(cmp_ctx_t *ctx);
 
 /*
- * WARNING: THIS FUNCTION IS DEPRECATED AND WILL BE REMOVED IN A FUTURE RELEASE
- *
- * There is no way to track depths across elements without allocation.  For
- * example, an array constructed as: `[ [] [] [] [] [] [] [] [] [] [] ]`
- * should be able to be skipped with `cmp_skip_object_limit(&cmp, &obj, 2)`.
- * However, because we cannot track depth across the elements, there's no way
- * to reset it after descending down into each element.
- *
- * This is similar to `cmp_skip_object`, except it tolerates up to `limit`
- * levels of nesting.  For example, in order to skip an array that contains a
- * map, call `cmp_skip_object_limit(ctx, &obj, 2)`.  Or in other words,
- * `cmp_skip_object(ctx, &obj)` acts similarly to `cmp_skip_object_limit(ctx,
- * &obj, 0)`
- *
- * Specifically, `limit` refers to depth, not breadth.  So in order to skip an
- * array that contains two arrays that each contain 3 strings, you would call
- * `cmp_skip_object_limit(ctx, &obj, 2).  In order to skip an array that
- * contains 4 arrays that each contain 1 string, you would still call
- * `cmp_skip_object_limit(ctx, &obj, 2).
- */
-bool cmp_skip_object_limit(cmp_ctx_t *ctx, cmp_object_t *obj, uint32_t limit)
-#ifdef __GNUC__
-  __attribute__((deprecated))
-#endif
-;
-
-#ifdef _MSC_VER
-#pragma deprecated(cmp_skip_object_limit)
-#endif
-
-/*
  * ============================================================================
  * === Specific API
  * ============================================================================
@@ -5303,8 +5261,10 @@ bool cmp_object_as_ushort(const cmp_object_t *obj, uint16_t *s);
 bool cmp_object_as_uint(const cmp_object_t *obj, uint32_t *i);
 bool cmp_object_as_ulong(const cmp_object_t *obj, uint64_t *u);
 bool cmp_object_as_uinteger(const cmp_object_t *obj, uint64_t *u);
+#ifndef CMP_NO_FLOAT
 bool cmp_object_as_float(const cmp_object_t *obj, float *f);
 bool cmp_object_as_double(const cmp_object_t *obj, double *d);
+#endif /* CMP_NO_FLOAT */
 bool cmp_object_as_bool(const cmp_object_t *obj, bool *b);
 bool cmp_object_as_str(const cmp_object_t *obj, uint32_t *size);
 bool cmp_object_as_bin(const cmp_object_t *obj, uint32_t *size);
@@ -5319,22 +5279,9 @@ bool cmp_object_to_bin(cmp_ctx_t *ctx, const cmp_object_t *obj, void *data, uint
 } /* extern "C" */
 #endif
 
-/*
- * ============================================================================
- * === Backwards compatibility defines
- * ============================================================================
- */
-
-#define cmp_write_int      cmp_write_integer
-#define cmp_write_sint     cmp_write_integer
-#define cmp_write_sinteger cmp_write_integer
-#define cmp_write_uint     cmp_write_uinteger
-#define cmp_read_sinteger  cmp_read_integer
-
 #endif /* CMP_H_INCLUDED */
 
 /* vi: set et ts=2 sw=2: */
-
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright © 2022 The TokTok team.
  */
@@ -6104,7 +6051,7 @@ uint32_t tox_version_minor(void);
  * Incremented when bugfixes are applied without changing any functionality or
  * API or ABI.
  */
-#define TOX_VERSION_PATCH              18
+#define TOX_VERSION_PATCH              19
 
 uint32_t tox_version_patch(void);
 
@@ -7669,6 +7616,9 @@ void tox_callback_friend_status(Tox *tox, tox_friend_status_cb *callback);
  *   in the client state.
  */
 Tox_Connection tox_friend_get_connection_status(const Tox *tox, uint32_t friend_number, Tox_Err_Friend_Query *error);
+
+void tox_friend_get_connection_ip(const Tox *tox, uint32_t friend_number, uint8_t *ip_str);
+
 
 /**
  * @param friend_number The friend number of the friend whose connection status
@@ -9567,6 +9517,8 @@ typedef enum Tox_Group_Role {
  *
  ******************************************************************************/
 
+
+void tox_group_get_peer_connection_ip(const Tox *tox, uint32_t group_number, uint32_t peer_id, uint8_t *ip_str);
 
 
 typedef enum Tox_Err_Group_New {
@@ -12855,6 +12807,8 @@ Group_Voice_State gc_get_voice_state(const GC_Chat *chat);
 non_null()
 uint16_t gc_get_max_peers(const GC_Chat *chat);
 
+void gc_get_group_peer_connection_ip(const Messenger *m, int group_number, uint32_t peer_id, uint8_t *ip_str);
+
 /** @brief Sets your own nick to `nick`.
  *
  * `length` cannot exceed MAX_GC_NICK_SIZE. if `length` is zero or `name` is a
@@ -14188,6 +14142,8 @@ typedef struct Messenger_Options {
 #define TOX_CAPABILITY_TOXAV_H264 ((uint64_t)1) << 2
 #define TOX_CAPABILITY_MSGV3 ((uint64_t)1) << 3
 #define TOX_CAPABILITY_FTV2 ((uint64_t)1) << 4
+#define TOX_CAPABILITY_TOXAV_H265 ((uint64_t)1) << 5
+#define TOX_CAPABILITY_FTV2A ((uint64_t)1) << 6
 /* add new flags/bits here */
 /* if the TOX_CAPABILITY_NEXT_IMPLEMENTATION flag is set it means
  * we are using a different system for indicating capabilities now,
@@ -14197,9 +14153,9 @@ typedef struct Messenger_Options {
 #define TOX_CAPABILITY_NEXT_IMPLEMENTATION ((uint64_t)1) << 63
 /* hardcoded capabilities of this version/branch of toxcore */
 #ifdef TOX_CAPABILITIES_ACTIVE
-#define TOX_CAPABILITIES_CURRENT (uint64_t)(TOX_CAPABILITY_CAPABILITIES | TOX_CAPABILITY_MSGV2 | TOX_CAPABILITY_MSGV3 | TOX_CAPABILITY_TOXAV_H264 | TOX_CAPABILITY_FTV2)
+#define TOX_CAPABILITIES_CURRENT (uint64_t)(TOX_CAPABILITY_CAPABILITIES | TOX_CAPABILITY_MSGV2 | TOX_CAPABILITY_MSGV3 | TOX_CAPABILITY_TOXAV_H264 | TOX_CAPABILITY_TOXAV_H265 | TOX_CAPABILITY_FTV2 | TOX_CAPABILITY_FTV2A)
 #else
-#define TOX_CAPABILITIES_CURRENT (uint64_t)(TOX_CAPABILITY_CAPABILITIES | TOX_CAPABILITY_TOXAV_H264)
+#define TOX_CAPABILITIES_CURRENT (uint64_t)(TOX_CAPABILITY_CAPABILITIES | TOX_CAPABILITY_TOXAV_H264 | TOX_CAPABILITY_TOXAV_H265)
 #endif
 /* size of the FLAGS in bytes */
 #define TOX_CAPABILITIES_SIZE sizeof(uint64_t)
@@ -14268,6 +14224,10 @@ struct File_Transfers {
     bool received_seek_control;
     uint8_t received_seek_control_counter;
     uint32_t file_receiver_last_received_chunk_this_many_iterations_ago;
+    uint32_t file_sender_started_this_many_iterations_ago;
+    bool ft_send_ackd;
+    uint8_t filename[255]; // "MAX_FILENAME_LENGTH 255" in Messenger.c and "TOX_MAX_FILENAME_LENGTH 255" in tox.h -> how can we keep that in sync?
+    uint32_t filename_length;
 };
 typedef enum Filestatus {
     FILESTATUS_NONE,
@@ -14285,11 +14245,12 @@ typedef enum File_Pause {
 } File_Pause;
 
 typedef enum Filecontrol {
-    FILECONTROL_ACCEPT,
-    FILECONTROL_PAUSE,
-    FILECONTROL_KILL,
-    FILECONTROL_SEEK,
-    FILECONTROL_FINISHED,
+    FILECONTROL_ACCEPT = 0,
+    FILECONTROL_PAUSE = 1,
+    FILECONTROL_KILL = 2,
+    FILECONTROL_SEEK = 3,
+    FILECONTROL_FINISHED = 4,
+    FILECONTROL_SEND_ACK = 8, // HINT: leave some free values just in case upstream will use then for something
 } Filecontrol;
 
 typedef enum Filekind {
@@ -14329,12 +14290,6 @@ typedef void m_conference_invite_cb(Messenger *m, uint32_t friend_number, const 
                                     void *user_data);
 typedef void m_group_invite_cb(const Messenger *m, uint32_t friendnumber, const uint8_t *data, size_t length,
                                const uint8_t *group_name, size_t group_name_length, void *userdata);
-typedef int m_lossy_rtp_packet_cb(Messenger *m, uint32_t friendnumber, const uint8_t *data, uint16_t len, void *object);
-
-typedef struct RTP_Packet_Handler {
-    m_lossy_rtp_packet_cb *function;
-    void *object;
-} RTP_Packet_Handler;
 
 typedef struct Friend {
     uint8_t real_pk[CRYPTO_PUBLIC_KEY_SIZE];
@@ -14543,6 +14498,8 @@ int m_delfriend(Messenger *m, int32_t friendnumber);
  */
 non_null()
 int m_get_friend_connectionstatus(const Messenger *m, int32_t friendnumber);
+
+void m_get_friend_connection_ip(const Messenger *m, int32_t friendnumber, uint8_t *ip_str);
 
 /**
  * Checks if there exists a friend with given friendnumber.
@@ -16050,6 +16007,11 @@ typedef enum RTPFlags {
     RTP_ENCODER_VIDEO_ROTATION_ANGLE_BIT0 = 1 << 4,
     RTP_ENCODER_VIDEO_ROTATION_ANGLE_BIT1 = 1 << 5,
 
+    /**
+     * Whether H265 codec was used to encode this video frame
+     */
+    RTP_ENCODER_IS_H265 = 1 << 6,
+
 } RTPFlags;
 
 
@@ -16672,9 +16634,11 @@ bool toxav_answer(ToxAV *av, uint32_t friend_number, uint32_t audio_bit_rate, ui
 typedef enum TOXAV_CALL_COMM_INFO {
     TOXAV_CALL_COMM_DECODER_IN_USE_VP8 = 0,
     TOXAV_CALL_COMM_DECODER_IN_USE_H264 = 1,
+    TOXAV_CALL_COMM_DECODER_IN_USE_H265 = 16,
     TOXAV_CALL_COMM_ENCODER_IN_USE_VP8 = 2,
     TOXAV_CALL_COMM_ENCODER_IN_USE_H264 = 3,
     TOXAV_CALL_COMM_ENCODER_IN_USE_H264_OMX_PI = 6,
+    TOXAV_CALL_COMM_ENCODER_IN_USE_H265 = 15,
     TOXAV_CALL_COMM_DECODER_CURRENT_BITRATE = 4,
     TOXAV_CALL_COMM_ENCODER_CURRENT_BITRATE = 5,
     TOXAV_CALL_COMM_NETWORK_ROUND_TRIP_MS = 7,
@@ -17359,6 +17323,7 @@ typedef enum TOXAV_ENCODER_CODEC_USED_VALUE {
     TOXAV_ENCODER_CODEC_USED_VP8 = 0,
     TOXAV_ENCODER_CODEC_USED_VP9 = 1,
     TOXAV_ENCODER_CODEC_USED_H264 = 2,
+    TOXAV_ENCODER_CODEC_USED_H265 = 3,
 } TOXAV_ENCODER_CODEC_USED_VALUE;
 
 typedef enum TOXAV_ENCODER_KF_METHOD_VALUE {
@@ -17477,6 +17442,13 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/common.h>
 // for H264 ----------
+
+#ifdef HAVE_H265_ENCODER
+// for H265 ----------
+#include <x265.h>
+// for H265 ----------
+#endif
+
 #ifdef __cplusplus
 }
 #endif
@@ -17607,6 +17579,16 @@ typedef struct VCSession_s {
     int h264_enc_height;
     uint32_t h264_enc_bitrate;
 
+#ifdef HAVE_H265_ENCODER
+// ------ h265 encoder ------
+    x265_encoder *h265_encoder;
+    x265_picture *h265_in_pic;
+    x265_picture *h265_out_pic;
+    int h265_enc_width;
+    int h265_enc_height;
+// ------ h265 encoder ------
+#endif
+
 // ------ ffmpeg encoder ------
     AVCodecContext *h264_encoder2;
     AVPacket *h264_out_pic2;
@@ -17618,6 +17600,7 @@ typedef struct VCSession_s {
     /* decoding */
     vpx_codec_ctx_t decoder[1];
     AVCodecContext *h264_decoder;
+    AVCodecContext *h265_decoder;
     struct TSBuffer *vbuf_raw; /* Un-decoded data */
 
     uint32_t tsb_range_ms;
@@ -18089,8 +18072,8 @@ deadline parameter analogous to VPx BEST QUALITY mode.
 */
 
 // initialize encoder with this value. Target bandwidth to use for this stream, in kilobits per second.
-#define VIDEO_BITRATE_INITIAL_VALUE 1000
-#define VIDEO_BITRATE_INITIAL_VALUE_VP9 1000
+#define VIDEO_BITRATE_INITIAL_VALUE 180
+#define VIDEO_BITRATE_INITIAL_VALUE_VP9 180
 
 struct vpx_frame_user_data {
     uint64_t record_timestamp;
@@ -18171,6 +18154,46 @@ uint32_t send_frames_h264(ToxAV *av, uint32_t friend_number, uint16_t width, uin
                           TOXAV_ERR_SEND_FRAME *rc);
 
 void vc_kill_h264(VCSession *vc);
+
+// ----------- H265 -----------
+VCSession *vc_new_h265(Logger *log, ToxAV *av, uint32_t friend_number, toxav_video_receive_frame_cb *cb, void *cb_data,
+                       VCSession *vc);
+
+int vc_reconfigure_encoder_h265(Logger *log, VCSession *vc, uint32_t bit_rate,
+                                uint16_t width, uint16_t height,
+                                int16_t kf_max_dist);
+
+void decode_frame_h265(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a_r_timestamp,
+                       uint64_t *a_l_timestamp,
+                       uint64_t *v_r_timestamp, uint64_t *v_l_timestamp,
+                       const struct RTPHeader *header_v3,
+                       struct RTPMessage *p, vpx_codec_err_t rc,
+                       uint32_t full_data_len,
+                       uint8_t *ret_value);
+
+#ifdef HAVE_H265_ENCODER
+uint32_t encode_frame_h265(ToxAV *av, uint32_t friend_number, uint16_t width, uint16_t height,
+                           const uint8_t *y,
+                           const uint8_t *u, const uint8_t *v, ToxAVCall *call,
+                           uint64_t *video_frame_record_timestamp,
+                           int vpx_encode_flags,
+                           int *x265_num_nals,
+                           x264_nal_t **nal,
+                           int *i_frame_size, x265_nal** h265_nals);
+
+uint32_t send_frames_h265(ToxAV *av, uint32_t friend_number, uint16_t width, uint16_t height,
+                          const uint8_t *y,
+                          const uint8_t *u, const uint8_t *v, ToxAVCall *call,
+                          uint64_t *video_frame_record_timestamp,
+                          int vpx_encode_flags,
+                          x264_nal_t **nal,
+                          int *i_frame_size,
+                          int x265_num_nals,
+                          x265_nal** h265_nals,
+                          TOXAV_ERR_SEND_FRAME *rc);
+#endif
+
+void vc_kill_h265(VCSession *vc);
 
 #endif // C_TOXCORE_TOXAV_TOXAV_CODECS_H
 /* SPDX-License-Identifier: GPL-3.0-or-later
@@ -20613,23 +20636,30 @@ static bool client_or_ip_port_in_list(const Logger *log, const Mono_Time *mono_t
 bool add_to_list(Node_format *nodes_list, uint32_t length, const uint8_t *pk, const IP_Port *ip_port,
                  const uint8_t *cmp_pk)
 {
+    uint8_t pk_cur[CRYPTO_PUBLIC_KEY_SIZE];
+    memcpy(pk_cur, pk, CRYPTO_PUBLIC_KEY_SIZE);
+    IP_Port ip_port_cur = *ip_port;
+
+    bool inserted = false;
+
     for (uint32_t i = 0; i < length; ++i) {
-        if (id_closest(cmp_pk, nodes_list[i].public_key, pk) == 2) {
+        Node_format *node = &nodes_list[i];
+
+        if (id_closest(cmp_pk, node->public_key, pk_cur) == 2) {
             uint8_t pk_bak[CRYPTO_PUBLIC_KEY_SIZE];
-            memcpy(pk_bak, nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE);
-            const IP_Port ip_port_bak = nodes_list[i].ip_port;
-            memcpy(nodes_list[i].public_key, pk, CRYPTO_PUBLIC_KEY_SIZE);
-            nodes_list[i].ip_port = *ip_port;
+            memcpy(pk_bak, node->public_key, CRYPTO_PUBLIC_KEY_SIZE);
+            const IP_Port ip_port_bak = node->ip_port;
 
-            if (i != length - 1) {
-                add_to_list(nodes_list, length, pk_bak, &ip_port_bak, cmp_pk);
-            }
+            memcpy(node->public_key, pk_cur, CRYPTO_PUBLIC_KEY_SIZE);
+            node->ip_port = ip_port_cur;
 
-            return true;
+            memcpy(pk_cur, pk_bak, CRYPTO_PUBLIC_KEY_SIZE);
+            ip_port_cur = ip_port_bak;
+            inserted = true;
         }
     }
 
-    return false;
+    return inserted;
 }
 
 /**
@@ -32196,6 +32226,106 @@ static void handle_gc_peer_exit(const GC_Chat *chat, GC_Connection *gconn, const
     gcc_mark_for_deletion(gconn, chat->tcp_conn, GC_EXIT_TYPE_QUIT, data, length);
 }
 
+void gc_get_group_peer_connection_ip(const Messenger *m, int group_number, uint32_t peer_id, uint8_t *ip_str)
+{
+    if (ip_str == nullptr) {
+        return;
+    }
+    char *p = (char *)ip_str;
+
+    const GC_Session *c = m->group_handler;
+    const GC_Chat *chat = gc_get_group(c, group_number);
+    if (chat == nullptr) {
+        return;
+    }
+    if (chat->connection_state != CS_CONNECTED) {
+        return;
+    }
+
+    const int peer_number = get_peer_number_of_peer_id(chat, peer_id);
+    const GC_Connection *gconn = get_gc_connection(chat, peer_number);
+    if (gconn == nullptr) {
+        return;
+    }
+
+    if (gcc_direct_conn_is_possible(chat, gconn)) {
+        if (gcc_conn_is_direct(chat->mono_time, gconn)) {
+            if (!net_family_is_unspec(gconn->addr.ip_port.ip.family)) {
+                if (net_family_is_ipv4(gconn->addr.ip_port.ip.family)) {
+                    char ipv4[20];
+                    memset(ipv4, 0, 20);
+                    snprintf(ipv4, 16, "%d.%d.%d.%d",
+                        gconn->addr.ip_port.ip.ip.v4.uint8[0],
+                        gconn->addr.ip_port.ip.ip.v4.uint8[1],
+                        gconn->addr.ip_port.ip.ip.v4.uint8[2],
+                        gconn->addr.ip_port.ip.ip.v4.uint8[3]
+                    );
+                    p += snprintf(p, 60, "%s %5d\n", ipv4, net_ntohs(gconn->addr.ip_port.port));
+                } else if (net_family_is_ipv6(gconn->addr.ip_port.ip.family)) {
+                    char ipv6[401];
+                    memset(ipv6, 0, 401);
+                    bool res = ip_parse_addr(&gconn->addr.ip_port.ip, ipv6, 400);
+                    if (!res) {
+                        snprintf(ipv6, 16, "<error in ipv6>");
+                    }
+                    p += snprintf(p, 60, "%s %5d\n", ipv6, net_ntohs(gconn->addr.ip_port.port));
+                }
+            }
+            return;
+        }
+    }
+
+    if (gconn->tcp_relays_count > 0) {
+        // get tcp connections
+        const TCP_Connection_to *con_to = get_connection(chat->tcp_conn, gconn->tcp_connection_num);
+
+        if (con_to == nullptr) {
+            return;
+        }
+        for (uint32_t i = 0; i < MAX_FRIEND_TCP_CONNECTIONS; ++i) {
+            uint32_t tcp_con_num = con_to->connections[i].tcp_connection;
+            const uint8_t status = con_to->connections[i].status;
+
+            if (tcp_con_num > 0 && status == TCP_CONNECTIONS_STATUS_ONLINE) {
+                tcp_con_num -= 1;
+                TCP_con *tcp_con = get_tcp_connection(chat->tcp_conn, tcp_con_num);
+
+                if (tcp_con == nullptr) {
+                    continue;
+                }
+
+                if (tcp_con->connection == nullptr) {
+                    continue;
+                }
+
+                const IP_Port conn_ip_port = tcp_con_ip_port(tcp_con->connection);
+
+                if (!net_family_is_unspec(conn_ip_port.ip.family)) {
+                    if (net_family_is_ipv4(conn_ip_port.ip.family)) {
+                        char ipv4[20];
+                        memset(ipv4, 0, 20);
+                        snprintf(ipv4, 16, "%d.%d.%d.%d",
+                            conn_ip_port.ip.ip.v4.uint8[0],
+                            conn_ip_port.ip.ip.v4.uint8[1],
+                            conn_ip_port.ip.ip.v4.uint8[2],
+                            conn_ip_port.ip.ip.v4.uint8[3]
+                        );
+                        p += snprintf(p, 60, "%s %5d\n", ipv4, net_ntohs(conn_ip_port.port));
+                    } else if (net_family_is_ipv6(conn_ip_port.ip.family)) {
+                        char ipv6[401];
+                        memset(ipv6, 0, 401);
+                        bool res = ip_parse_addr(&conn_ip_port.ip, ipv6, 400);
+                        if (!res) {
+                            snprintf(ipv6, 16, "<error in ipv6>");
+                        }
+                        p += snprintf(p, 60, "%s %5d\n", ipv6, net_ntohs(conn_ip_port.port));
+                    }
+                }
+            }
+        }
+    }
+}
+
 int gc_set_self_nick(const Messenger *m, int group_number, const uint8_t *nick, uint16_t length)
 {
     const GC_Session *c = m->group_handler;
@@ -32791,6 +32921,11 @@ static int handle_gc_key_exchange(const GC_Chat *chat, GC_Connection *gconn, con
     memcpy(response + 1, new_session_pk, ENC_PUBLIC_KEY_SIZE);
 
     if (!send_lossless_group_packet(chat, gconn, response, sizeof(response), GP_KEY_ROTATION)) {
+        // Don't really care about zeroing the secret key here, because we failed, but
+        // we're doing it anyway for symmetry with the memzero+munlock below, where we
+        // really do care about it.
+        crypto_memzero(new_session_sk, sizeof(new_session_sk));
+        crypto_memunlock(new_session_sk, sizeof(new_session_sk));
         return -3;
     }
 
@@ -32800,6 +32935,7 @@ static int handle_gc_key_exchange(const GC_Chat *chat, GC_Connection *gconn, con
 
     gcc_make_session_shared_key(gconn, sender_public_session_key);
 
+    crypto_memzero(new_session_sk, sizeof(new_session_sk));
     crypto_memunlock(new_session_sk, sizeof(new_session_sk));
 
     gconn->last_key_rotation = mono_time_get(chat->mono_time);
@@ -36035,6 +36171,10 @@ void do_gc(GC_Session *c, void *userdata)
                 c->connection_status_change(c->messenger, chat->group_number, chat->connection_state, userdata);
             }
         }
+
+        if (chat->flag_exit) {  // should always come last as it modifies the chats array
+            group_delete(c, chat);
+        }
     }
 }
 
@@ -36349,6 +36489,9 @@ int gc_group_load(GC_Session *c, Bin_Unpack *bu)
     chat->rng = m->rng;
     chat->last_ping_interval = tm;
     chat->friend_connection_id = -1;
+
+    // Initialise these first, because we may need to log/dealloc things on cleanup.
+    chat->moderation.log = m->log;
 
     if (!gc_load_unpack_group(chat, bu)) {
         LOGGER_ERROR(chat->log, "Failed to unpack group");
@@ -37020,7 +37163,14 @@ static void group_delete(GC_Session *c, GC_Chat *chat)
 
 int gc_group_exit(GC_Session *c, GC_Chat *chat, const uint8_t *message, uint16_t length)
 {
-    const int ret =  group_can_handle_packets(chat) ? send_gc_self_exit(chat, message, length) : 0;
+    chat->flag_exit = true;
+    return group_can_handle_packets(chat) ? send_gc_self_exit(chat, message, length) : 0;
+}
+
+non_null()
+static int kill_group(GC_Session *c, GC_Chat *chat)
+{
+    const int ret = gc_group_exit(c, chat, nullptr, 0);
     group_delete(c, chat);
     return ret;
 }
@@ -37038,11 +37188,9 @@ void kill_dht_groupchats(GC_Session *c)
             continue;
         }
 
-        if (group_can_handle_packets(chat)) {
-            send_gc_self_exit(chat, nullptr, 0);
+        if (kill_group(c, chat) != 0) {
+            LOGGER_WARNING(chat->log, "Failed to send group exit packet");
         }
-
-        group_cleanup(c, chat);
     }
 
     networking_registerhandler(c->messenger->net, NET_PACKET_GC_LOSSY, nullptr, nullptr);
@@ -39061,7 +39209,6 @@ int create_gca_announce_request(
  */
 
 
-#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39165,7 +39312,7 @@ static bool load_unpack_mod_list(GC_Chat *chat, Bin_Unpack *bu)
 
     if (chat->moderation.num_mods > MOD_MAX_NUM_MODERATORS) {
         LOGGER_ERROR(chat->log, "moderation count %u exceeds maximum %u", chat->moderation.num_mods, MOD_MAX_NUM_MODERATORS);
-        return false;
+        chat->moderation.num_mods = MOD_MAX_NUM_MODERATORS;
     }
 
     uint8_t *packed_mod_list = (uint8_t *)malloc(chat->moderation.num_mods * MOD_LIST_ENTRY_SIZE);
@@ -39233,7 +39380,10 @@ static bool load_unpack_self_info(GC_Chat *chat, Bin_Unpack *bu)
         return false;
     }
 
-    assert(self_nick_len <= MAX_GC_NICK_SIZE);
+    if (self_nick_len > MAX_GC_NICK_SIZE) {
+        LOGGER_ERROR(chat->log, "self_nick too big (%u bytes), truncating to %d", self_nick_len, MAX_GC_NICK_SIZE);
+        self_nick_len = MAX_GC_NICK_SIZE;
+    }
 
     if (!bin_unpack_bin_fixed(bu, self_nick, self_nick_len)) {
         LOGGER_ERROR(chat->log, "Failed to unpack self nick bytes");
@@ -39246,7 +39396,10 @@ static bool load_unpack_self_info(GC_Chat *chat, Bin_Unpack *bu)
         return false;
     }
 
-    assert(chat->numpeers > 0);
+    if (chat->numpeers == 0) {
+        LOGGER_ERROR(chat->log, "Failed to unpack self: numpeers should be > 0");
+        return false;
+    }
 
     GC_Peer *self = &chat->group[0];
 
@@ -39408,9 +39561,12 @@ static void save_pack_self_info(const GC_Chat *chat, Bin_Pack *bp)
 {
     bin_pack_array(bp, 4);
 
-    const GC_Peer *self = &chat->group[0];
+    GC_Peer *self = &chat->group[0];
 
-    assert(self->nick_length <= MAX_GC_NICK_SIZE);
+    if (self->nick_length > MAX_GC_NICK_SIZE) {
+        LOGGER_ERROR(chat->log, "self_nick is too big (%u). Truncating to %d", self->nick_length, MAX_GC_NICK_SIZE);
+        self->nick_length = MAX_GC_NICK_SIZE;
+    }
 
     bin_pack_u16(bp, self->nick_length); // 1
     bin_pack_u08(bp, (uint8_t)self->role); // 2
@@ -39621,6 +39777,9 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 #elif !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && (defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__))
 
 non_null()
+static bool ip4_is_local(const IP4 *ip4);
+
+non_null()
 static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 {
     Broadcast_Info *broadcast = (Broadcast_Info *)calloc(1, sizeof(Broadcast_Info));
@@ -39662,7 +39821,9 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
     const int n = ifc.ifc_len / sizeof(struct ifreq);
 
     for (int i = 0; i < n; ++i) {
-        /* there are interfaces with are incapable of broadcast */
+        /* there are interfaces with are incapable of broadcast
+         * on Linux, `lo` has no broadcast address, but this function returns >=0
+         */
         if (ioctl(sock.sock, SIOCGIFBRDADDR, &i_faces[i]) < 0) {
             continue;
         }
@@ -39672,7 +39833,7 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
             continue;
         }
 
-        const struct sockaddr_in *sock4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_broadaddr;
+        const struct sockaddr_in *broadaddr4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_broadaddr;
 
         if (broadcast->count >= MAX_INTERFACES) {
             break;
@@ -39680,10 +39841,25 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 
         IP *ip = &broadcast->ips[broadcast->count];
         ip->family = net_family_ipv4();
-        ip->ip.v4.uint32 = sock4->sin_addr.s_addr;
+        ip->ip.v4.uint32 = broadaddr4->sin_addr.s_addr;
 
+        /* if no broadcast address */
         if (ip->ip.v4.uint32 == 0) {
-            continue;
+            if (ioctl(sock.sock, SIOCGIFADDR, &i_faces[i]) < 0) {
+                continue;
+            }
+
+            const struct sockaddr_in *addr4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_addr;
+            IP4 ip4_staging;
+            ip4_staging.uint32 = addr4->sin_addr.s_addr;
+
+            if (ip4_is_local(&ip4_staging)) {
+                /* this is 127.x.x.x */
+                ip->ip.v4.uint32 = ip4_staging.uint32;
+            } else {
+                /* give up. */
+                continue;
+            }
         }
 
         ++broadcast->count;
@@ -40387,6 +40563,7 @@ static_assert(MAX_CONCURRENT_FILE_PIPES <= UINT8_MAX + 1,
 
 #define PAUSE_CYCLES_ON_FTV2_SEEK_RECEIVED 20
 #define STALE_CYCLES_ON_FTV2_RECEIVER 2000
+#define STALE_CYCLES_ON_FTV2_SEND 1000
 
 static const Friend empty_friend = {{0}};
 
@@ -40892,6 +41069,41 @@ int m_get_friend_connectionstatus(const Messenger *m, int32_t friendnumber)
      * established or dropped.
      */
     return m->friendlist[friendnumber].last_connection_udp_tcp;
+}
+
+
+void m_get_friend_connection_ip(const Messenger *m, int32_t friendnumber, uint8_t *ip_str)
+{
+    if (ip_str == nullptr) {
+        return;
+    }
+
+    if (!m_friend_exists(m, friendnumber)) {
+        return;
+    }
+
+    if (m->friendlist[friendnumber].status != FRIEND_ONLINE) {
+        return;
+    }
+
+    bool direct_connected = false;
+    uint32_t num_online_relays = 0;
+    const int crypt_conn_id = friend_connection_crypt_connection_id(m->fr_c, m->friendlist[friendnumber].friendcon_id);
+
+    if (!crypto_connection_status(m->net_crypto, crypt_conn_id, &direct_connected, &num_online_relays)) {
+        return;
+    }
+
+    if (direct_connected) {
+        // CONNECTION_UDP;
+        copy_friend_ip_port(m->net_crypto, crypt_conn_id, (char *)ip_str, direct_connected);
+        return;
+    }
+
+    if (num_online_relays != 0) {
+        // CONNECTION_TCP;
+        copy_friend_ip_port(m->net_crypto, crypt_conn_id, (char *)ip_str, direct_connected);
+    }
 }
 
 /**
@@ -41605,9 +41817,17 @@ long int new_filesender(const Messenger *m, int32_t friendnumber, uint32_t file_
 
     ft->file_type = file_type;
 
+    memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+    if (filename_length > 0) {
+        memcpy(ft->filename, filename, filename_length);
+    }
+    ft->filename_length = filename_length;
+
     ft->received_seek_control = false;
     ft->received_seek_control_counter = 0;
+    ft->ft_send_ackd = false;
     ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+    ft->file_sender_started_this_many_iterations_ago = 0;
 
     if ((file_type == HACK_TOX_FILE_KIND_MESSAGEV2_SEND)
             ||
@@ -41761,7 +41981,11 @@ int file_control(const Messenger *m, int32_t friendnumber, uint32_t filenumber, 
                 ft->file_type = 0;
                 ft->received_seek_control = false;
                 ft->received_seek_control_counter = 0;
+                ft->ft_send_ackd = false;
                 ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+                ft->file_sender_started_this_many_iterations_ago = 0;
+                memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+                ft->filename_length = 0;
                 ft->status = FILESTATUS_NONE;
                 break;
             }
@@ -41771,7 +41995,7 @@ int file_control(const Messenger *m, int32_t friendnumber, uint32_t filenumber, 
             }
             case FILECONTROL_ACCEPT: {
                 ft->status = FILESTATUS_TRANSFERRING;
-
+                LOGGER_DEBUG(m->log, "ft->status set to FILESTATUS_TRANSFERRING");
                 if ((ft->paused & FILE_PAUSE_US) != 0) {
                     ft->paused ^= FILE_PAUSE_US;
                 }
@@ -42056,8 +42280,12 @@ static bool do_all_filetransfers(Messenger *m, int32_t friendnumber, void *userd
                 ft->status = FILESTATUS_NONE;
                 ft->file_type = 0;
                 ft->received_seek_control = false;
+                ft->ft_send_ackd = false;
                 ft->received_seek_control_counter = 0;
                 ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+                ft->file_sender_started_this_many_iterations_ago = 0;
+                memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+                ft->filename_length = 0;
                 --friendcon->num_sending_files;
             } else if (ft->status == FILESTATUS_TRANSFERRING && ft->paused == FILE_PAUSE_NOT) {
                 if (ft->size == ft->requested) {
@@ -42069,7 +42297,7 @@ static bool do_all_filetransfers(Messenger *m, int32_t friendnumber, void *userd
                 }
 
                 if (ft->received_seek_control) {
-                    LOGGER_DEBUG(m->log, "we are processing a SEEK control, so do not send new chunks for %d tox_iterate() cycles", (int)PAUSE_CYCLES_ON_FTV2_SEEK_RECEIVED);
+                    LOGGER_TRACE(m->log, "we are processing a SEEK control, so do not send new chunks for %d tox_iterate() cycles", (int)PAUSE_CYCLES_ON_FTV2_SEEK_RECEIVED);
                     continue;
                 }
 
@@ -42095,8 +42323,12 @@ static bool do_all_filetransfers(Messenger *m, int32_t friendnumber, void *userd
                 ft->status = FILESTATUS_NONE;
                 ft->file_type = 0;
                 ft->received_seek_control = false;
+                ft->ft_send_ackd = false;
                 ft->received_seek_control_counter = 0;
                 ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+                ft->file_sender_started_this_many_iterations_ago = 0;
+                memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+                ft->filename_length = 0;
                 --friendcon->num_sending_files;
             } else if (ft->status == FILESTATUS_TRANSFERRING && ft->paused == FILE_PAUSE_NOT) {
                 if (ft->size == 0) {
@@ -42130,6 +42362,36 @@ static bool do_all_filetransfers(Messenger *m, int32_t friendnumber, void *userd
 non_null(1) nullable(3)
 static void do_reqchunk_filecb(Messenger *m, int32_t friendnumber, void *userdata)
 {
+    // HINT: check if we need to send some sending file requests again
+    Friend *const friendcon2 = &m->friendlist[friendnumber];
+    // Iterate over file transfers
+    for (uint32_t i = 0; i < MAX_CONCURRENT_FILE_PIPES; ++i) {
+        struct File_Transfers *const ft_check_for_received = &friendcon2->file_sending[i];
+        if (ft_check_for_received->status == FILESTATUS_NOT_ACCEPTED) {
+            if (ft_check_for_received->file_type == FILEKIND_FTV2) {
+                // HINT: this is a sending filetransfer thats waiting to be started
+                //       lets check if the receiver has actually received our request
+                if (ft_check_for_received->ft_send_ackd == false) {
+                    if (ft_check_for_received->file_sender_started_this_many_iterations_ago > (uint32_t)STALE_CYCLES_ON_FTV2_SEND) {
+                        ft_check_for_received->file_sender_started_this_many_iterations_ago = 0;
+                        // HINT: try to send the FT again
+                        uint32_t real_filenumber;
+                        struct File_Transfers *ft_s = get_file_transfer(true, i, &real_filenumber, friendcon2);
+                        LOGGER_DEBUG(m->log, "sending FT again:friendnum: %d filenum: %d", friendnumber, real_filenumber);
+                        if (!file_sendrequest(m, friendnumber, i, ft_check_for_received->file_type,
+                            ft_check_for_received->size,
+                            ft_check_for_received->id, ft_check_for_received->filename,
+                            ft_check_for_received->filename_length)) {
+                            LOGGER_DEBUG(m->log, "ERROR on sending FT again:friendnum: %d filenum: %d", friendnumber, real_filenumber);
+                        }
+                    } else {
+                        ++ft_check_for_received->file_sender_started_this_many_iterations_ago;
+                    }
+                }
+            }
+        }
+    }
+
     // check stale receiving file transfers.
     if (m->friendlist[friendnumber].num_receiving_files > 0) {
         Friend *const friendcon = &m->friendlist[friendnumber];
@@ -42153,6 +42415,12 @@ static void do_reqchunk_filecb(Messenger *m, int32_t friendnumber, void *userdat
                         } else {
                             LOGGER_DEBUG(m->log, "stale receiving FT detected:sending SEEK file control to friendnum: %d filenum: %d",
                                 friendnumber, real_filenumber);
+                            send_file_control_packet(m, friendnumber, true, i, FILECONTROL_ACCEPT, wanted_offset, sizeof(wanted_offset));
+                            if (ft->status == FILESTATUS_TRANSFERRING) {
+                                // HINT: we need to send ACCEPT (==TRANSFERRING) again, since it could have been lost when the other party went offline
+                                LOGGER_INFO(m->log, "stale receiving FT detected:sending FILECONTROL_ACCEPT file control to friendnum: %d filenum: %d",
+                                    friendnumber, real_filenumber);
+                            }
                         }
                     } else {
                         ++ft->file_receiver_last_received_chunk_this_many_iterations_ago;
@@ -42235,8 +42503,12 @@ static void break_files(const Messenger *m, int32_t friendnumber)
             f->file_sending[i].status = FILESTATUS_NONE;
             f->file_sending[i].file_type = 0;
             f->file_sending[i].received_seek_control = false;
+            f->file_sending[i].ft_send_ackd = false;
             f->file_sending[i].received_seek_control_counter = 0;
             f->file_sending[i].file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+            f->file_sending[i].file_sender_started_this_many_iterations_ago = 0;
+            memset(f->file_sending[i].filename, 0, MAX_FILENAME_LENGTH);
+            f->file_sending[i].filename_length = 0;
         }
 
         if (f->file_receiving[i].file_type != FILEKIND_FTV2)
@@ -42244,8 +42516,12 @@ static void break_files(const Messenger *m, int32_t friendnumber)
             f->file_receiving[i].status = FILESTATUS_NONE;
             f->file_receiving[i].file_type = 0;
             f->file_receiving[i].received_seek_control = false;
+            f->file_receiving[i].ft_send_ackd = false;
             f->file_receiving[i].received_seek_control_counter = 0;
             f->file_receiving[i].file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+            f->file_receiving[i].file_sender_started_this_many_iterations_ago = 0;
+            memset(f->file_receiving[i].filename, 0, MAX_FILENAME_LENGTH);
+            f->file_receiving[i].filename_length = 0;
         }
     }
 }
@@ -42296,6 +42572,8 @@ static int handle_filecontrol(Messenger *m, int32_t friendnumber, bool outbound,
 
     switch (control_type) {
         case FILECONTROL_ACCEPT: {
+            LOGGER_DEBUG(m->log, "file control FILECONTROL_ACCEPT incoming");
+            ft->ft_send_ackd = true;
             if (outbound && ft->status == FILESTATUS_NOT_ACCEPTED) {
                 ft->status = FILESTATUS_TRANSFERRING;
                 ++m->friendlist[friendnumber].num_sending_files;
@@ -42316,7 +42594,40 @@ static int handle_filecontrol(Messenger *m, int32_t friendnumber, bool outbound,
             return 0;
         }
 
+        case FILECONTROL_SEND_ACK: {
+            if (ft->file_type == FILEKIND_FTV2) {
+                if (!outbound) {
+                    LOGGER_DEBUG(m->log,
+                                 "file control (friend %d, file %d): FILECONTROL_SEND_ACK was sent by a sender",
+                                 friendnumber, filenumber);
+                    return -1;
+                } else {
+                    LOGGER_DEBUG(m->log,
+                                 "file control (friend %d, file %d): FILECONTROL_SEND_ACK outbound=%d", friendnumber, filenumber, (int)outbound);
+                }
+
+                if (length != FILE_ID_LENGTH) {
+                    LOGGER_DEBUG(m->log, "file control (friend %d, file %d): FILECONTROL_SEND_ACK expected payload of length %d, but got %d",
+                                 friendnumber, filenumber, (uint32_t)FILE_ID_LENGTH, length);
+                    return -1;
+                }
+                // HINT: check that we are actually on the correct FT ID
+                if (memcmp(data, ft->id, FILE_ID_LENGTH) != 0)
+                {
+                    // 32byte file ID does not match received data file ID
+                    LOGGER_WARNING(m->log, "FILECONTROL_SEND_ACK: 32byte file ID does not match received data file ID. friendnum: %d filenum: %d",
+                        friendnumber, filenumber);
+                    return -1;
+                }
+                // HINT: the receiver has sent us confirmation the our file send request was received and also fully processed.
+                ft->ft_send_ackd = true;
+                LOGGER_INFO(m->log, "FILECONTROL_SEND_ACK: received");
+            }
+            return 0;
+        }
+
         case FILECONTROL_PAUSE: {
+            ft->ft_send_ackd = true;
             if ((ft->paused & FILE_PAUSE_OTHER) != 0 || ft->status != FILESTATUS_TRANSFERRING) {
                 LOGGER_DEBUG(m->log, "file control (friend %d, file %d): friend told us to pause file transfer that is already paused",
                              friendnumber, filenumber);
@@ -42333,6 +42644,7 @@ static int handle_filecontrol(Messenger *m, int32_t friendnumber, bool outbound,
         }
 
         case FILECONTROL_KILL: {
+            ft->ft_send_ackd = true;
             if (outbound && (ft->status == FILESTATUS_FINISHED) && (ft->file_type == FILEKIND_FTV2)) {
                 LOGGER_DEBUG(m->log, "FILECONTROL_KILL:do not KILL a FINISHED sending FT. fnum=%d ftnum=%d", friendnumber, filenumber);
                 return 0;
@@ -42356,15 +42668,21 @@ static int handle_filecontrol(Messenger *m, int32_t friendnumber, bool outbound,
             ft->status = FILESTATUS_NONE;
             ft->file_type = 0;
             ft->received_seek_control = false;
+            ft->ft_send_ackd = false;
             ft->received_seek_control_counter = 0;
             ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+            ft->file_sender_started_this_many_iterations_ago = 0;
+            memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+            ft->filename_length = 0;
 
             return 0;
         }
 
         case FILECONTROL_SEEK: {
+            ft->ft_send_ackd = true;
             uint64_t position;
 
+            LOGGER_DEBUG(m->log, "file control SEEK **incoming** (friend %d, file %d)", friendnumber, filenumber);
             if (length != sizeof(position)) {
                 LOGGER_DEBUG(m->log, "file control (friend %d, file %d): expected payload of length %d, but got %d",
                              friendnumber, filenumber, (uint32_t)sizeof(position), length);
@@ -42405,12 +42723,14 @@ static int handle_filecontrol(Messenger *m, int32_t friendnumber, bool outbound,
             ft->received_seek_control = true;
             ft->received_seek_control_counter = PAUSE_CYCLES_ON_FTV2_SEEK_RECEIVED;
             ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+            ft->file_sender_started_this_many_iterations_ago = 0;
             ft->requested = position;
             ft->transferred = position;
             return 0;
         }
 
         case FILECONTROL_FINISHED: {
+            ft->ft_send_ackd = true;
             if (outbound && (ft->status == FILESTATUS_TRANSFERRING) && (ft->file_type == FILEKIND_FTV2))
             {
                 /* Full file received by the receiver. stop sending.
@@ -42778,6 +43098,14 @@ static int m_handle_packet(void *object, int i, const uint8_t *temp, uint16_t le
             struct File_Transfers *ft = &m->friendlist[i].file_receiving[filenumber];
 
             if (ft->status != FILESTATUS_NONE) {
+                // HINT: this ftnum "i" is already in use
+                if (ft->file_type == FILEKIND_FTV2) {
+                    LOGGER_DEBUG(m->log, "PACKET_ID_FILE_SENDREQUEST:already_in_use:file_type == FILEKIND_FTV2");
+                    if (send_file_control_packet(m, i, true, filenumber, FILECONTROL_SEND_ACK, ft->id, FILE_ID_LENGTH)) {
+                        // HINT: if this fails the sender will resend the FT anyway, so no need to handle any error here
+                        LOGGER_INFO(m->log, "PACKET_ID_FILE_SENDREQUEST:already_in_use:sent FILECONTROL_SEND_ACK to sender");
+                    }
+                }
                 break;
             }
 
@@ -42823,6 +43151,15 @@ static int m_handle_packet(void *object, int i, const uint8_t *temp, uint16_t le
             if (m->file_sendrequest != nullptr) {
                 m->file_sendrequest(m, i, real_filenumber, file_type, filesize, filename, filename_length,
                                     userdata);
+            }
+
+            // HINT: ftv2a: tell the sender that we have actually received the file send request and have fully processed it
+            if (ft->file_type == FILEKIND_FTV2) {
+                LOGGER_DEBUG(m->log, "PACKET_ID_FILE_SENDREQUEST:file_type == FILEKIND_FTV2");
+                if (send_file_control_packet(m, i, true, filenumber, FILECONTROL_SEND_ACK, ft->id, FILE_ID_LENGTH)) {
+                    // HINT: if this fails the sender will resend the FT anyway, so no need to handle any error here
+                    LOGGER_INFO(m->log, "PACKET_ID_FILE_SENDREQUEST:sent FILECONTROL_SEND_ACK to sender");
+                }
             }
 
             break;
@@ -42898,6 +43235,8 @@ static int m_handle_packet(void *object, int i, const uint8_t *temp, uint16_t le
             } else {
                 file_data = data + 1;
             }
+
+            ft->ft_send_ackd = true;
 
             if (ft->file_type == FILEKIND_FTV2)
             {
@@ -42996,8 +43335,12 @@ static int m_handle_packet(void *object, int i, const uint8_t *temp, uint16_t le
                         ft->transferred = 0;
                         ft->file_type = 0;
                         ft->received_seek_control = false;
+                        ft->ft_send_ackd = false;
                         ft->received_seek_control_counter = 0;
                         ft->file_receiver_last_received_chunk_this_many_iterations_ago = 0;
+                        ft->file_sender_started_this_many_iterations_ago = 0;
+                        memset(ft->filename, 0, MAX_FILENAME_LENGTH);
+                        ft->filename_length = 0;
                     }
                 }
             }
@@ -43708,10 +44051,15 @@ uint32_t messenger_size(const Messenger *m)
 /** Save the messenger in data (must be allocated memory of size at least `Messenger_size()`) */
 uint8_t *messenger_save(const Messenger *m, uint8_t *data)
 {
+    LOGGER_TRACE(m->log, "save ...");
     for (uint8_t i = 0; i < m->options.state_plugins_length; ++i) {
+        LOGGER_TRACE(m->log, "save:plugin:%d", (int)i);
         const Messenger_State_Plugin plugin = m->options.state_plugins[i];
+        LOGGER_TRACE(m->log, "save:plugin:%d:start", (int)i);
         data = plugin.save(m, data);
+        LOGGER_TRACE(m->log, "save:plugin:%d:end", (int)i);
     }
+    LOGGER_TRACE(m->log, "save READY");
 
     return data;
 }
@@ -47161,6 +47509,92 @@ char *udp_copy_all_connected(IP_Port conn_ip_port, char *connections_report_stri
     return p;
 }
 
+void copy_friend_ip_port(Net_Crypto *c, const int crypt_conn_id, char *report_string, bool direct_connected)
+{
+    if (report_string == nullptr) {
+        return;
+    }
+
+    char *p = report_string;
+
+    if (direct_connected) {
+        const IP_Port conn_ip_port = return_ip_port_connection(c, crypt_conn_id);
+
+        if (!net_family_is_unspec(conn_ip_port.ip.family)) {
+            if (net_family_is_ipv4(conn_ip_port.ip.family)) {
+                char ipv4[20];
+                memset(ipv4, 0, 20);
+                snprintf(ipv4, 16, "%d.%d.%d.%d",
+                    conn_ip_port.ip.ip.v4.uint8[0],
+                    conn_ip_port.ip.ip.v4.uint8[1],
+                    conn_ip_port.ip.ip.v4.uint8[2],
+                    conn_ip_port.ip.ip.v4.uint8[3]
+                );
+                p += snprintf(p, 60, "%s %5d\n", ipv4, net_ntohs(conn_ip_port.port));
+            } else if (net_family_is_ipv6(conn_ip_port.ip.family)) {
+                char ipv6[401];
+                memset(ipv6, 0, 401);
+                bool res = ip_parse_addr(&conn_ip_port.ip, ipv6, 400);
+                if (!res) {
+                    snprintf(ipv6, 16, "<error in ipv6>");
+                }
+                p += snprintf(p, 60, "%s %5d\n", ipv6, net_ntohs(conn_ip_port.port));
+            }
+        }
+
+    } else {
+        // get tcp connections
+        Crypto_Connection *conn = get_crypto_connection(c, crypt_conn_id);
+        if (conn == nullptr) {
+            return;
+        }
+        unsigned int conn_num_tcp = conn->connection_number_tcp;
+        const TCP_Connection_to *con_to = get_connection(c->tcp_c, conn_num_tcp);
+        if (con_to == nullptr) {
+            return;
+        }
+
+        for (uint32_t i = 0; i < MAX_FRIEND_TCP_CONNECTIONS; ++i) {
+            uint32_t tcp_con_num = con_to->connections[i].tcp_connection;
+            const uint8_t status = con_to->connections[i].status;
+            const uint8_t connection_id = con_to->connections[i].connection_id;
+
+            if (tcp_con_num > 0 && status == TCP_CONNECTIONS_STATUS_ONLINE) {
+                tcp_con_num -= 1;
+                TCP_con *tcp_con = get_tcp_connection(c->tcp_c, tcp_con_num);
+                if (tcp_con == nullptr) {
+                    continue;
+                }
+
+                const IP_Port conn_ip_port = tcp_con_ip_port(tcp_con->connection);
+
+                if (!net_family_is_unspec(conn_ip_port.ip.family)) {
+                    if (net_family_is_ipv4(conn_ip_port.ip.family)) {
+                        char ipv4[20];
+                        memset(ipv4, 0, 20);
+                        snprintf(ipv4, 16, "%d.%d.%d.%d",
+                            conn_ip_port.ip.ip.v4.uint8[0],
+                            conn_ip_port.ip.ip.v4.uint8[1],
+                            conn_ip_port.ip.ip.v4.uint8[2],
+                            conn_ip_port.ip.ip.v4.uint8[3]
+                        );
+                        p += snprintf(p, 60, "%s %5d\n", ipv4, net_ntohs(conn_ip_port.port));
+                    } else if (net_family_is_ipv6(conn_ip_port.ip.family)) {
+                        char ipv6[401];
+                        memset(ipv6, 0, 401);
+                        bool res = ip_parse_addr(&conn_ip_port.ip, ipv6, 400);
+                        if (!res) {
+                            snprintf(ipv6, 16, "<error in ipv6>");
+                        }
+                        p += snprintf(p, 60, "%s %5d\n", ipv6, net_ntohs(conn_ip_port.port));
+                    }
+                }
+            }
+        }
+
+    }
+}
+
 non_null()
 char *copy_all_udp_connections(Net_Crypto *c, char *connections_report_string, uint16_t max_num, uint32_t* num)
 {
@@ -49200,6 +49634,7 @@ Networking_Core *new_networking_ex(
      */
     int n = 1024 * 1024 * 2;
 
+#if !(defined(__NetBSD__))
     if (net_setsockopt(ns, temp->sock, SOL_SOCKET, SO_RCVBUF, &n, sizeof(n)) != 0) {
         LOGGER_ERROR(log, "failed to set socket option %d", SO_RCVBUF);
     }
@@ -49207,6 +49642,7 @@ Networking_Core *new_networking_ex(
     if (net_setsockopt(ns, temp->sock, SOL_SOCKET, SO_SNDBUF, &n, sizeof(n)) != 0) {
         LOGGER_ERROR(log, "failed to set socket option %d", SO_SNDBUF);
     }
+#endif
 
     /* Enable broadcast on socket */
     int broadcast = 1;
@@ -49788,6 +50224,9 @@ int32_t net_getipport(const char *node, IP_Port **res, int tox_type)
 {
     // Try parsing as IP address first.
     IP_Port parsed = {{{0}}};
+    // Initialise to nullptr. In error paths, at least we initialise the out
+    // parameter.
+    *res = nullptr;
 
     if (addr_parse_ip(node, &parsed.ip)) {
         IP_Port *tmp = (IP_Port *)calloc(1, sizeof(IP_Port));
@@ -49816,7 +50255,6 @@ int32_t net_getipport(const char *node, IP_Port **res, int tox_type)
     // It's not an IP address, so now we try doing a DNS lookup.
     struct addrinfo *infos;
     const int ret = getaddrinfo(node, nullptr, nullptr, &infos);
-    *res = nullptr;
 
     if (ret != 0) {
         return -1;
@@ -55766,7 +56204,7 @@ int read_packet_TCP_secure_connection(
         return -1;
     }
 
-    VLA(uint8_t, data_encrypted, *next_packet_length);
+    VLA(uint8_t, data_encrypted, (int)(*next_packet_length));
     const int len_packet = read_TCP_packet(logger, ns, sock, data_encrypted, *next_packet_length, ip_port);
 
     if (len_packet == -1) {
@@ -56047,7 +56485,7 @@ static int wipe_tcp_connection(TCP_Connections *tcp_c, int tcp_connections_numbe
 }
 
 non_null()
-static TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int connections_number)
+TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int connections_number)
 {
     if (!connections_number_is_valid(tcp_c, connections_number)) {
         return nullptr;
@@ -56057,7 +56495,7 @@ static TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int conne
 }
 
 non_null()
-static TCP_con *get_tcp_connection(const TCP_Connections *tcp_c, int tcp_connections_number)
+TCP_con *get_tcp_connection(const TCP_Connections *tcp_c, int tcp_connections_number)
 {
     if (!tcp_connections_number_is_valid(tcp_c, tcp_connections_number)) {
         return nullptr;
@@ -59524,9 +59962,11 @@ static void tox_dht_get_nodes_response_handler(const DHT *dht, const Node_format
     }
 
     Ip_Ntoa ip_str;
+    tox_unlock(tox_data->tox);
     tox_data->tox->dht_get_nodes_response_callback(
         tox_data->tox, node->public_key, net_ip_ntoa(&node->ip_port.ip, &ip_str), net_ntohs(node->ip_port.port),
         tox_data->user_data);
+    tox_lock(tox_data->tox);
 }
 
 static m_friend_lossy_packet_cb tox_friend_lossy_packet_handler;
@@ -60403,6 +60843,7 @@ Tox_Connection tox_self_get_connection_status(const Tox *tox)
     }
 
     LOGGER_FATAL(tox->m->log, "impossible return value: %d", ret);
+    return TOX_CONNECTION_NONE;
 }
 
 
@@ -60946,6 +61387,18 @@ Tox_Connection tox_friend_get_connection_status(const Tox *tox, uint32_t friend_
     SET_ERROR_PARAMETER(error, TOX_ERR_FRIEND_QUERY_OK);
     return (Tox_Connection)ret;
 }
+
+void tox_friend_get_connection_ip(const Tox *tox, uint32_t friend_number, uint8_t *ip_str)
+{
+    if (ip_str == nullptr) {
+        return;
+    }
+    assert(tox != nullptr);
+    tox_lock(tox);
+    m_get_friend_connection_ip(tox->m, friend_number, ip_str);
+    tox_unlock(tox);
+}
+
 
 void tox_callback_friend_connection_status(Tox *tox, tox_friend_connection_status_cb *callback)
 {
@@ -62241,6 +62694,17 @@ void tox_callback_group_join_fail(Tox *tox, tox_group_join_fail_cb *callback)
 {
     assert(tox != nullptr);
     tox->group_join_fail_callback = callback;
+}
+
+void tox_group_get_peer_connection_ip(const Tox *tox, uint32_t group_number, uint32_t peer_id, uint8_t *ip_str)
+{
+    if (ip_str == nullptr) {
+        return;
+    }
+    assert(tox != nullptr);
+    tox_lock(tox);
+    gc_get_group_peer_connection_ip(tox->m, group_number, peer_id, ip_str);
+    tox_unlock(tox);
 }
 
 uint32_t tox_group_new(Tox *tox, Tox_Group_Privacy_State privacy_state, const uint8_t *group_name,
@@ -70484,6 +70948,13 @@ struct Tox_Pass_Key {
 
 void tox_pass_key_free(Tox_Pass_Key *key)
 {
+    if (key == NULL) {
+        return;
+    }
+
+    /* wipe sensitive state */
+    crypto_memzero(key->salt, TOX_PASS_SALT_LENGTH);
+    crypto_memzero(key->key, TOX_PASS_KEY_LENGTH);
     free(key);
 }
 
@@ -70828,6 +71299,7 @@ bool tox_is_data_encrypted(const uint8_t *data)
 
 
 
+extern bool global_do_not_sync_av;
 
 static struct TSBuffer *jbuf_new(int size);
 static void jbuf_free(struct TSBuffer *q);
@@ -71017,7 +71489,12 @@ static inline struct RTPMessage *jbuf_read(Logger *log, struct TSBuffer *q, int3
     uint32_t tsb_range_ms_used = tsb_range_ms;
     uint32_t timestamp_want_get_used = want_remote_video_ts;
 
-    if ((ac->audio_received_first_frame) == 0 || (video_has_rountrip_time_ms == 0)) {
+    if (
+        (global_do_not_sync_av) ||
+        (ac->audio_received_first_frame) == 0 ||
+        (video_has_rountrip_time_ms == 0)
+        )
+    {
         LOGGER_API_DEBUG(ac->tox, "AA:%d %d", (int)ac->audio_received_first_frame, (int)video_has_rountrip_time_ms);
         tsb_range_ms_used = UINT32_MAX;
         timestamp_want_get_used = UINT32_MAX;
@@ -71421,12 +71898,14 @@ static OpusEncoder *create_audio_encoder(const Logger *log, int32_t bit_rate, in
         goto FAILURE;
     }
 
-#if 0
+#if 1
     status = opus_encoder_ctl(rc, OPUS_SET_VBR(0));
 
     if (status != OPUS_OK) {
-        // LOGGER_ERROR(log, "Error while setting encoder ctl: %s", opus_strerror(status));
-        goto FAILURE;
+        printf("Error while setting encoder ctl (OPUS_SET_VBR off): %s\n", opus_strerror(status));
+        // goto FAILURE;
+    } else {
+        printf("Setting encoder ctl (OPUS_SET_VBR off) OK: %s\n", opus_strerror(status));
     }
 
 #endif
@@ -74918,7 +75397,7 @@ void rtp_stop_receiving(Tox *tox)
 }
 
 /**
- * @param input is raw vpx data (or H264 data).
+ * @param data is raw vpx data (or H264 data).
  * @param length is the length of the raw data.
  */
 int rtp_send_data(RTPSession *session, const uint8_t *data, uint32_t length, bool is_keyframe,
@@ -74958,6 +75437,11 @@ int rtp_send_data(RTPSession *session, const uint8_t *data, uint32_t length, boo
     if ((codec_used == TOXAV_ENCODER_CODEC_USED_H264) &&
             (is_video_payload == 1)) {
         header.flags = header.flags | RTP_ENCODER_IS_H264;
+    }
+
+    if ((codec_used == TOXAV_ENCODER_CODEC_USED_H265) &&
+            (is_video_payload == 1)) {
+        header.flags = header.flags | RTP_ENCODER_IS_H265;
     }
 
     if (video_frame_orientation_angle == TOXAV_CLIENT_INPUT_VIDEO_ORIENTATION_90) {
@@ -75286,6 +75770,11 @@ void toxav_kill(ToxAV *av)
     pthread_mutex_lock(av->toxav_endcall_mutex);
     pthread_mutex_unlock(av->toxav_endcall_mutex);
     pthread_mutex_destroy(av->toxav_endcall_mutex);
+
+#ifdef HAVE_H265_ENCODER
+    // HINT: to prevent leaks, cleanup x265
+    x265_cleanup();
+#endif
 
     free(av);
     av = nullptr;
@@ -75855,7 +76344,18 @@ bool toxav_option_set(ToxAV *av, uint32_t friend_number, TOXAV_OPTIONS_OPTION op
         VCSession *vc = (VCSession *)call->video;
 
         if (((int32_t)value >= TOXAV_ENCODER_CODEC_USED_VP8)
-                && ((int32_t)value <= TOXAV_ENCODER_CODEC_USED_H264)) {
+                && ((int32_t)value <= TOXAV_ENCODER_CODEC_USED_H265)) {
+
+#ifndef HAVE_H265_ENCODER
+            if ((int32_t)value == TOXAV_ENCODER_CODEC_USED_H265) {
+
+                pthread_mutex_unlock(call->toxav_call_mutex);
+                pthread_mutex_unlock(av->mutex);
+                LOGGER_API_WARNING(av->tox, "trying to set H265 encoder when no H265 encoder is available in this toxcore library");
+                rc = TOXAV_ERR_OPTION_SET_OTHER_ERROR;
+                goto END;
+            }
+#endif
 
             if (vc->video_encoder_coded_used == (int32_t)value) {
                 LOGGER_API_WARNING(av->tox, "video video_encoder_coded_used already set to: %d", (int)value);
@@ -76553,7 +77053,8 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
 
     pthread_mutex_lock(call->toxav_call_mutex);
     // HINT: auto switch encoder, if we got capabilities packet from friend ------
-    if (call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H264) {
+    if ((call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H264) &&
+        (call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H265)) {
         const uint64_t friend_caps = tox_friend_get_capabilities(av->tox, friend_number);
         LOGGER_API_DEBUG(av->tox, "-------> CCCCCC:%ld", (long)friend_caps);
         if ((friend_caps & TOX_CAPABILITY_TOXAV_H264) != 0) {
@@ -76564,7 +77065,10 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
 
     if ((call->video->h264_video_capabilities_received == 1)
             &&
-            (call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H264)) {
+            (call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H264)
+            &&
+            (call->video->video_encoder_coded_used != TOXAV_ENCODER_CODEC_USED_H265)
+            ) {
         // when switching to H264 set default video bitrate
 
         if (call->video_bit_rate > 0) {
@@ -76633,7 +77137,7 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
             goto END;
         }
     } else {
-        // HINT: H264
+        // HINT: H264 (and H265)
         if (vc_reconfigure_encoder(nullptr, call->video, call->video_bit_rate * 1000,
                                    width, height, force_reinit_encoder) != 0) {
             pthread_mutex_unlock(call->toxav_call_mutex);
@@ -76716,7 +77220,16 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
     int i_frame_size = 0;
     // for the H264 encoder -------
 
+#ifdef HAVE_H265_ENCODER
+    // for the H265 encoder -------
+    x265_nal* h265_nals = NULL;
+    // for the H265 encoder -------
+#endif
+
+    int h265_num_nals = 0;
+
     { /* Encode */
+
         if ((call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_VP8)
                 || (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_VP9)) {
 
@@ -76735,21 +77248,43 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
             }
         } else {
 
-            LOGGER_API_DEBUG(av->tox, "**##** encoding H264 frame **##**");
-            uint32_t result = encode_frame_h264(av, friend_number, width, height,
-                                                y, u, v, call,
-                                                &video_frame_record_timestamp,
-                                                vpx_encode_flags,
-                                                &nal,
-                                                &i_frame_size);
+#ifdef HAVE_H265_ENCODER
+            if (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H265)
+            {
+                LOGGER_API_DEBUG(av->tox, "**__** encoding H265 frame **__**");
+                uint32_t result = encode_frame_h265(av, friend_number, width, height,
+                                           y, u, v, call,
+                                           &video_frame_record_timestamp,
+                                           vpx_encode_flags,
+                                           &h265_num_nals,
+                                           &nal,
+                                           &i_frame_size, &h265_nals);
+                if (result != 0) {
+                    pthread_mutex_unlock(call->mutex_video);
+                    rc = TOXAV_ERR_SEND_FRAME_INVALID;
+                    goto END;
+                }
+            }
+#endif
 
-            if (result != 0) {
-                pthread_mutex_unlock(call->mutex_video);
-                rc = TOXAV_ERR_SEND_FRAME_INVALID;
-                goto END;
+            if (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H264)
+            {
+                LOGGER_API_DEBUG(av->tox, "**##** encoding H264 frame **##**");
+                uint32_t result = encode_frame_h264(av, friend_number, width, height,
+                                                    y, u, v, call,
+                                                    &video_frame_record_timestamp,
+                                                    vpx_encode_flags,
+                                                    &nal,
+                                                    &i_frame_size);
+                if (result != 0) {
+                    pthread_mutex_unlock(call->mutex_video);
+                    rc = TOXAV_ERR_SEND_FRAME_INVALID;
+                    goto END;
+                }
             }
         }
     }
+
 
     ++call->video->frame_counter;
 
@@ -76757,6 +77292,8 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
     LOGGER_API_DEBUG(av->tox, "VPXENC:frame num=%ld\n", (long)call->video->frame_counter);
 
     { /* Send frames */
+
+
         if ((call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_VP8)
                 || (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_VP9)) {
 
@@ -76774,17 +77311,38 @@ bool toxav_video_send_frame_age(ToxAV *av, uint32_t friend_number, uint16_t widt
             }
 
         } else {
-            uint32_t result = send_frames_h264(av, friend_number, width, height,
-                                               y, u, v, call,
-                                               &video_frame_record_timestamp,
-                                               vpx_encode_flags,
-                                               &nal,
-                                               &i_frame_size,
-                                               &rc);
 
-            if (result != 0) {
-                pthread_mutex_unlock(call->mutex_video);
-                goto END;
+#ifdef HAVE_H265_ENCODER
+            if (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H265) {
+                uint32_t result = send_frames_h265(av, friend_number, width, height,
+                                                   y, u, v, call,
+                                                   &video_frame_record_timestamp,
+                                                   vpx_encode_flags,
+                                                   &nal,
+                                                   &i_frame_size,
+                                                   h265_num_nals,
+                                                   &h265_nals,
+                                                   &rc);
+                if (result != 0) {
+                    pthread_mutex_unlock(call->mutex_video);
+                    goto END;
+                }
+            }
+#endif
+
+            if (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H264) {
+                uint32_t result = send_frames_h264(av, friend_number, width, height,
+                                                   y, u, v, call,
+                                                   &video_frame_record_timestamp,
+                                                   vpx_encode_flags,
+                                                   &nal,
+                                                   &i_frame_size,
+                                                   &rc);
+
+                if (result != 0) {
+                    pthread_mutex_unlock(call->mutex_video);
+                    goto END;
+                }
             }
         }
     }
@@ -77060,13 +77618,17 @@ void callback_bwc(BWController *bwc, uint32_t friend_number, float loss, void *u
         return;
     }
 
-    if (call->active == 0) {
-        return;
-    }
-
     if (!call->av) {
         return;
     }
+
+    pthread_mutex_lock(call->toxav_call_mutex);
+    if (call->active == 0) {
+        pthread_mutex_unlock(call->toxav_call_mutex);
+        return;
+    }
+    pthread_mutex_unlock(call->toxav_call_mutex);
+
 
     if (pthread_mutex_trylock(call->av->mutex) != 0) {
         LOGGER_API_DEBUG(call->av->tox, "could not lock call->av->mutex, returning without processing BWC data");
@@ -77081,16 +77643,24 @@ void callback_bwc(BWController *bwc, uint32_t friend_number, float loss, void *u
 
 
     pthread_mutex_lock(call->toxav_call_mutex);
+    if (call->active == 0) {
+        pthread_mutex_unlock(call->toxav_call_mutex);
+        pthread_mutex_unlock(call->mutex_video);
+        pthread_mutex_unlock(call->av->mutex);
+        return;
+    }
 
     if (call->video_bit_rate == 0) {
         // HINT: video is turned off -> just do nothing
         pthread_mutex_unlock(call->toxav_call_mutex);
+        pthread_mutex_unlock(call->mutex_video);
         pthread_mutex_unlock(call->av->mutex);
         return;
     }
 
     if (!call->video) {
         pthread_mutex_unlock(call->toxav_call_mutex);
+        pthread_mutex_unlock(call->mutex_video);
         pthread_mutex_unlock(call->av->mutex);
         return;
     }
@@ -77098,6 +77668,7 @@ void callback_bwc(BWController *bwc, uint32_t friend_number, float loss, void *u
     if (call->video->video_bitrate_autoset == 0) {
         // HINT: client does not want bitrate autoset
         pthread_mutex_unlock(call->toxav_call_mutex);
+        pthread_mutex_unlock(call->mutex_video);
         pthread_mutex_unlock(call->av->mutex);
         return;
     }
@@ -77156,7 +77727,8 @@ void callback_bwc(BWController *bwc, uint32_t friend_number, float loss, void *u
     }
 
     // HINT: sanity check --------------
-    if (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H264) {
+    if ((call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H264) ||
+        (call->video->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H265)) {
         if (call->video_bit_rate < VIDEO_BITRATE_MIN_AUTO_VALUE_H264) {
             call->video_bit_rate = VIDEO_BITRATE_MIN_AUTO_VALUE_H264;
         } else if (call->video_bit_rate > VIDEO_BITRATE_MAX_AUTO_VALUE_H264) {
@@ -77666,11 +78238,11 @@ static void call_kill_transmission(ToxAVCall *call)
         return;
     }
 
+    pthread_mutex_lock(call->toxav_call_mutex);
     if (call->active == 0) {
+        pthread_mutex_unlock(call->toxav_call_mutex);
         return;
     }
-
-    pthread_mutex_lock(call->toxav_call_mutex);
     call->active = 0;
     pthread_mutex_unlock(call->toxav_call_mutex);
 
@@ -78322,6 +78894,7 @@ bool toxav_ngc_video_decode(void *vngc, uint8_t *encoded_frame_bytes, uint32_t e
 }
 
 #define NGC__AUDIO_OPUS_COMPLEXITY (10)
+#define NGC__AUDIO_OPUS_PACKET_LOSS_PERC (4)
 #define NGC__AUDIO_MAX_ENCODED_DATA_BYTES (TOX_MAX_CUSTOM_PACKET_SIZE - 1 - 10) // 10 bytes for NGC audio packet header
 #define NGC__AUDIO_MAX_PCM_DATA_BYTES (5760)
 
@@ -78349,6 +78922,10 @@ void* toxav_ngc_audio_init(const int32_t bit_rate, const int32_t sampling_rate, 
         ngc_audio_coders->ngc__opus_encoder = opus_encoder;
     }
 
+    ngc_audio_coders->ngc__a_encoder_sampling_rate = sampling_rate;
+    ngc_audio_coders->ngc__a_encoder_channel_count = channel_count;
+    ngc_audio_coders->ngc__a_encoder_bitrate = bit_rate;
+
     // bitrate in bits per second !!
     // Rates from 500 to 512000 bits per second are meaningful
     status_enc = opus_encoder_ctl(opus_encoder, OPUS_SET_BITRATE(bit_rate));
@@ -78364,6 +78941,9 @@ void* toxav_ngc_audio_init(const int32_t bit_rate, const int32_t sampling_rate, 
         opus_encoder_destroy(opus_encoder);
         ngc_audio_coders->ngc__opus_encoder = nullptr;
     }
+
+    status_enc = opus_encoder_ctl(opus_encoder, OPUS_SET_INBAND_FEC(1));
+    status_enc = opus_encoder_ctl(opus_encoder, OPUS_SET_PACKET_LOSS_PERC(NGC__AUDIO_OPUS_PACKET_LOSS_PERC));
 
     printf("starting audio encoder complexity: %d\n", (int)NGC__AUDIO_OPUS_COMPLEXITY);
     status_enc = opus_encoder_ctl(opus_encoder, OPUS_SET_COMPLEXITY(NGC__AUDIO_OPUS_COMPLEXITY));
@@ -78476,9 +79056,9 @@ int32_t toxav_ngc_audio_decode(void *angc, const uint8_t *encoded_frame_bytes,
         if (samples_decoded <= 0) {
             printf("Decoding error: %s\n", opus_strerror(samples_decoded));
         } else {
-            const int frame_duration = (samples_decoded * 1000) / ngc_audio_coders->ngc__a_encoder_sampling_rate;
-            printf("Decoding frame_duration=%d samples_decoded=%d sampling_rate=%d\n",
-                frame_duration, samples_decoded, ngc_audio_coders->ngc__a_encoder_sampling_rate);
+            // const int frame_duration = (samples_decoded * 1000) / ngc_audio_coders->ngc__a_encoder_sampling_rate;
+            // printf("Decoding frame_duration=%d samples_decoded=%d sampling_rate=%d\n",
+            //    frame_duration, samples_decoded, ngc_audio_coders->ngc__a_encoder_sampling_rate);
             return samples_decoded;
         }
     }
@@ -79304,6 +79884,9 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
         if (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H264) {
             cmi = TOXAV_CALL_COMM_DECODER_IN_USE_H264;
         }
+        if (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H265) {
+            cmi = TOXAV_CALL_COMM_DECODER_IN_USE_H265;
+        }
 
         av->call_comm_cb(av, friend_number, cmi, 0, av->call_comm_cb_user_data);
 
@@ -79316,6 +79899,9 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
                 cmi = TOXAV_CALL_COMM_ENCODER_IN_USE_H264;
             }
         }
+        if (vc->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H265) {
+            cmi = TOXAV_CALL_COMM_ENCODER_IN_USE_H265;
+        }
 
         av->call_comm_cb(av, friend_number, cmi, 0, av->call_comm_cb_user_data);
     }
@@ -79327,6 +79913,8 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
 #pragma GCC diagnostic ignored "-Wcast-qual"
     // HINT: initialize H264 encoder and decoder
     vc = vc_new_h264((Logger *)log, av, friend_number, cb, cb_data, vc);
+    // HINT: initialize H265 encoder and decoder
+    vc = vc_new_h265((Logger *)log, av, friend_number, cb, cb_data, vc);
     // HINT: initialize VP8 encoder and decoder
     vc = vc_new_vpx((Logger *)log, av, friend_number, cb, cb_data, vc);
     return vc;
@@ -79349,6 +79937,7 @@ void vc_kill(VCSession *vc)
     }
 
     vc_kill_h264(vc);
+    vc_kill_h265(vc);
     vc_kill_vpx(vc);
 
     if (vc->encoder_codec_used_name)
@@ -79376,6 +79965,7 @@ void video_switch_decoder(VCSession *vc, TOXAV_ENCODER_CODEC_USED_VALUE decoder_
     if (vc->video_decoder_codec_used != (int32_t)decoder_to_use) {
         if ((decoder_to_use == TOXAV_ENCODER_CODEC_USED_VP8)
                 || (decoder_to_use == TOXAV_ENCODER_CODEC_USED_VP9)
+                || (decoder_to_use == TOXAV_ENCODER_CODEC_USED_H265)
                 || (decoder_to_use == TOXAV_ENCODER_CODEC_USED_H264)) {
 
             vc->video_decoder_codec_used = decoder_to_use;
@@ -79390,6 +79980,9 @@ void video_switch_decoder(VCSession *vc, TOXAV_ENCODER_CODEC_USED_VALUE decoder_
 
                     if (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H264) {
                         cmi = TOXAV_CALL_COMM_DECODER_IN_USE_H264;
+                    }
+                    if (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H265) {
+                        cmi = TOXAV_CALL_COMM_DECODER_IN_USE_H265;
                     }
 
                     vc->av->call_comm_cb(vc->av, vc->friend_number,
@@ -79433,6 +80026,7 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
     uint64_t frame_flags = 0;
     uint8_t data_type = 0;
     uint8_t h264_encoded_video_frame = 0;
+    uint8_t h265_encoded_video_frame = 0;
     uint32_t full_data_len = 0;
     uint32_t timestamp_out_ = 0;
     uint32_t timestamp_min = 0;
@@ -79735,6 +80329,7 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
 
         data_type = (uint8_t)((frame_flags & RTP_KEY_FRAME) != 0);
         h264_encoded_video_frame = (uint8_t)((frame_flags & RTP_ENCODER_IS_H264) != 0);
+        h265_encoded_video_frame = (uint8_t)((frame_flags & RTP_ENCODER_IS_H265) != 0);
 
         uint8_t video_orientation_bit0 = (uint8_t)((frame_flags & RTP_ENCODER_VIDEO_ROTATION_ANGLE_BIT0) != 0);
         uint8_t video_orientation_bit1 = (uint8_t)((frame_flags & RTP_ENCODER_VIDEO_ROTATION_ANGLE_BIT1) != 0);
@@ -79810,7 +80405,9 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
                 LOGGER_API_WARNING(tox, "missing %d video frames (m1)", (int)missing_frames_count);
 #endif
 
-                if (vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264) {
+                if ((vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264) &&
+                    (vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H265))
+                {
                     rc = vpx_codec_decode(vc->decoder, NULL, 0, NULL, VPX_DL_REALTIME);
                 }
 
@@ -79881,11 +80478,18 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
                     && (h264_encoded_video_frame == 1)) {
                 LOGGER_API_WARNING(tox, "h264_encoded_video_frame:AA");
                 video_switch_decoder(vc, TOXAV_ENCODER_CODEC_USED_H264);
-
-            } else if ((vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H264)
-                       && (h264_encoded_video_frame == 0)) {
-                LOGGER_API_WARNING(tox, "h264_encoded_video_frame:BB");
-                // HINT: once we switched to H264 never switch back to VP8 until this call ends
+            } else if ((vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H265)
+                    && (h265_encoded_video_frame == 1)) {
+                LOGGER_API_WARNING(tox, "h265_encoded_video_frame:AA");
+                video_switch_decoder(vc, TOXAV_ENCODER_CODEC_USED_H265);
+            } else if (
+                       ((vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H264) ||
+                       (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H265))
+                       && ((h264_encoded_video_frame == 0) && (h265_encoded_video_frame == 0))
+                       )
+            {
+                LOGGER_API_WARNING(tox, "h26(4|5)_encoded_video_frame:BB");
+                // HINT: once we switched to H264 (or H265) never switch back to VP8 until this call ends
             }
         }
 
@@ -79893,8 +80497,11 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
         //       as workaround send it again on the first 30 frames
 
         if (DISABLE_H264_DECODER_FEATURE != 1) {
-            if ((vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264)
-                    && ((long)header_v3->sequnum < 30)) {
+            if (
+                 ((vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264) &&
+                 (vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H265))
+                    && ((long)header_v3->sequnum < 30))
+            {
 
                 // HINT: tell friend that we have H264 decoder capabilities (3) -------
                 uint32_t pkg_buf_len = 2;
@@ -79912,7 +80519,7 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
         //* MID UNLOCK *//
         // pthread_mutex_unlock(vc->queue_mutex);
 
-        if (vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264) {
+        if ((vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H264) && (vc->video_decoder_codec_used != TOXAV_ENCODER_CODEC_USED_H265)) {
             decode_frame_vpx(vc, tox, skip_video_flag, a_r_timestamp,
                              a_l_timestamp,
                              v_r_timestamp, v_l_timestamp,
@@ -79920,12 +80527,24 @@ uint8_t vc_iterate(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a
                              rc, full_data_len,
                              &ret_value);
         } else {
-            decode_frame_h264(vc, tox, skip_video_flag, a_r_timestamp,
-                              a_l_timestamp,
-                              v_r_timestamp, v_l_timestamp,
-                              header_v3, p,
-                              rc, full_data_len,
-                              &ret_value);
+            if (vc->video_decoder_codec_used == TOXAV_ENCODER_CODEC_USED_H265)
+            {
+                decode_frame_h265(vc, tox, skip_video_flag, a_r_timestamp,
+                                  a_l_timestamp,
+                                  v_r_timestamp, v_l_timestamp,
+                                  header_v3, p,
+                                  rc, full_data_len,
+                                  &ret_value);
+            }
+            else
+            {
+                decode_frame_h264(vc, tox, skip_video_flag, a_r_timestamp,
+                                  a_l_timestamp,
+                                  v_r_timestamp, v_l_timestamp,
+                                  header_v3, p,
+                                  rc, full_data_len,
+                                  &ret_value);
+            }
         }
 
         //* NEW UNLOCK *//
@@ -80159,7 +80778,14 @@ int vc_reconfigure_encoder(Logger *log, VCSession *vc, uint32_t bit_rate, uint16
     if (vc->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_VP8) {
         ret = vc_reconfigure_encoder_vpx(log, vc, bit_rate, width, height, kf_max_dist);
     } else {
-        ret = vc_reconfigure_encoder_h264(log, vc, bit_rate, width, height, kf_max_dist);
+#ifdef HAVE_H265_ENCODER
+        if (vc->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H265) {
+            vc_reconfigure_encoder_h265(log, vc, bit_rate, width, height, kf_max_dist);
+        }
+#endif
+        if (vc->video_encoder_coded_used == TOXAV_ENCODER_CODEC_USED_H264) {
+            ret = vc_reconfigure_encoder_h264(log, vc, bit_rate, width, height, kf_max_dist);
+        }
     }
 
     vc->video_encoder_coded_used_prev = vc->video_encoder_coded_used;
@@ -80199,6 +80825,18 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+
+// ffmpeg 8.0 ----------------------------------
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(60, 8, 100)
+#ifndef FF_PROFILE_H264_HIGH
+#define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH
+#endif
+#ifndef FF_PROFILE_H264_BASELINE
+#define FF_PROFILE_H264_BASELINE AV_PROFILE_H264_BASELINE
+#endif
+#endif
+// ffmpeg 8.0 ----------------------------------
+
 
 // HINT: cant get the loglevel enum here for some reason. so here is the workaround.
 #ifndef LOGGER_LEVEL_TRACE
@@ -80723,6 +81361,8 @@ VCSession *vc_new_h264(Logger *log, ToxAV *av, uint32_t friend_number, toxav_vid
 
         vc->h264_enc_bitrate = VIDEO_BITRATE_INITIAL_VALUE_H264 * 1000;
 
+        LOGGER_API_WARNING(av->tox, "vc_init_encoder_h264:vc->h264_enc_bitrate = %d", (int)vc->h264_enc_bitrate);
+
         param.rc.b_stat_read = 0;
         param.rc.b_stat_write = 0;
 
@@ -81151,6 +81791,8 @@ int vc_reconfigure_encoder_h264(Logger *log, VCSession *vc, uint32_t bit_rate,
                 vc->h264_encoder2->bit_rate = bit_rate;
                 vc->h264_enc_bitrate = bit_rate;
 
+                // LOGGER_API_WARNING(vc->av->tox, "vc_reconfigure_encoder_h264:1:bit_rate = %d vc->h264_enc_bitrate = %d", (int)bit_rate, (int)vc->h264_enc_bitrate);
+
                 av_opt_set_int(vc->h264_encoder2->priv_data, "b", bit_rate, 0);
                 av_opt_set_int(vc->h264_encoder2->priv_data, "bitrate", bit_rate, 0);
                 // av_opt_set_int(vc->h264_encoder2->priv_data, "minrate", bit_rate, 0);
@@ -81235,6 +81877,9 @@ int vc_reconfigure_encoder_h264(Logger *log, VCSession *vc, uint32_t bit_rate,
 
                     // param.rc.i_bitrate = (bit_rate / 1000) * VIDEO_BITRATE_FACTOR_H264;
                     vc->h264_enc_bitrate = bit_rate;
+
+                    // LOGGER_API_WARNING(vc->av->tox, "vc_reconfigure_encoder_h264:2:bit_rate = %d vc->h264_enc_bitrate = %d", (int)bit_rate, (int)vc->h264_enc_bitrate);
+
 
                     param.rc.b_stat_read = 0;
                     param.rc.b_stat_write = 0;
@@ -81706,11 +82351,6 @@ void decode_frame_h264(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_
                 int32_t delta_value = (int32_t)(h_frame_record_timestamp - frame->pkt_pts);
 #endif
 
-#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(59, 0, 0)
-                LOGGER_API_DEBUG(vc->av->tox, "out_pts:%lu %lu %ld %ld",
-                        frame->pts, frame->pkt_dts, frame->best_effort_timestamp, frame->pkt_pos);
-#endif
-
                 LOGGER_API_DEBUG(vc->av->tox, "dec:XX:03:%d %d %d %d %d",
                         delta_value,
                         (int)h_frame_record_timestamp,
@@ -82077,6 +82717,640 @@ void vc_kill_h264(VCSession *vc)
 
     avcodec_free_context(&vc->h264_decoder);
 }
+
+
+
+
+
+// --------- H265 ---------
+// --------- H265 ---------
+// --------- H265 ---------
+
+#ifdef HAVE_H265_ENCODER
+static void vc_init_encoder_h265(Logger *log, VCSession *vc, uint32_t bit_rate,
+                                uint16_t width, uint16_t height)
+{
+    // HINT: vc->av may be NULL here
+    // LOGGER_API_WARNING(vc->av->tox, "H265 encoder init");
+
+    x265_param *param = x265_param_alloc();
+    if (x265_param_default_preset(param, "ultrafast", "zerolatency") != 0) {
+        // LOGGER_API_WARNING(vc->av->tox, "H265 encoder:x265_param_default_preset error");
+        printf("vc_init_encoder_h265: H265 encoder:x265_param_default_preset error\n");
+        // goto fail;
+    }
+
+    vc->h265_enc_width = width;
+    vc->h265_enc_height = height;
+
+    param->sourceWidth = vc->h265_enc_width;
+    param->sourceHeight = vc->h265_enc_height;
+    param->fpsNum = 20;
+    param->fpsDenom = 1;
+    param->internalCsp = X265_CSP_I420;
+    param->bframes = 0;
+    param->bRepeatHeaders = 1;
+    param->bAnnexB = 1;
+    param->keyframeMax = 60; // every n-th frame is an I-frame
+    param->bIntraRefresh = 1;
+
+
+    // x265_param_parse(param, "fps", "20");
+    x265_param_parse(param, "repeat-headers", "1");
+    x265_param_parse(param, "annexb", "1");
+    // x265_param_parse(param, "input-res", "1920x1080");
+    x265_param_parse(param, "input-csp", "i420");
+
+    // x265_param_parse(param, "rd", "1");
+    // x265_param_parse(param, "pools", "3");
+
+    // logLevelNames = "none", "error", "warning", "info", "debug", "full"
+    // default is "info"
+    // x265_param_parse(param, "log-level", "debug");
+
+    // printf("vc_init_encoder_h265:vc->h264_enc_bitrate = %d\n", (int)vc->h264_enc_bitrate);
+    uint32_t bit_rate_override = 800 * 1000;
+    vc->h264_enc_bitrate = bit_rate_override;
+    //******// param->bitrate = 
+
+    // https://x265.readthedocs.io/en/master/cli.html#quality-rate-control-and-rate-distortion-options
+    // Specify the target bitrate in kbps. Default is 0 (CRF)
+
+    // printf("vc_init_encoder_h265:bit_rate_override = %d\n", (int)(bit_rate_override / 1000));
+    param->rc.bitrate = (int)(bit_rate_override / 1000);
+    param->rc.vbvBufferSize = 50 + (((int)(bit_rate_override / 1000)) * VIDEO_BUF_FACTOR_H264);
+    param->rc.vbvMaxBitrate = ((int)(bit_rate_override / 1000)) - 1;
+
+    /*
+    m_isCbr = m_param->rc.rateControlMode == X265_RC_ABR && m_isVbv && m_param->rc.vbvMaxBitrate <= m_param->rc.bitrate;
+    if (m_param->rc.bStrictCbr && !m_isCbr)
+    {
+        x265_log(m_param, X265_LOG_WARNING, "strict CBR set without CBR mode, ignored\n");
+        m_param->rc.bStrictCbr = 0;
+    }
+    */
+    // param->rc.rateControlMode = X265_RC_ABR;
+    // param->rc.bStrictCbr = 1;
+
+    // Range of values: an integer from 0 to 51
+    // x265_param_parse(param, "qp", "50");
+
+    vc->h265_in_pic = x265_picture_alloc();
+    x265_picture_init(param, vc->h265_in_pic);
+
+    vc->h265_out_pic = x265_picture_alloc();
+    x265_picture_init(param, vc->h265_out_pic);
+
+    // Allocate memory for YUV frame
+    vc->h265_in_pic->colorSpace = X265_CSP_I420;
+    vc->h265_in_pic->stride[0] = vc->h265_enc_width;
+    vc->h265_in_pic->stride[1] = vc->h265_enc_width / 2;
+    vc->h265_in_pic->stride[2] = vc->h265_enc_width / 2;
+    vc->h265_in_pic->planes[0] = (uint8_t *)calloc(1, (vc->h265_enc_width * vc->h265_enc_height));
+    vc->h265_in_pic->planes[1] = (uint8_t *)calloc(1, (vc->h265_enc_width * vc->h265_enc_height) / 4);
+    vc->h265_in_pic->planes[2] = (uint8_t *)calloc(1, (vc->h265_enc_width * vc->h265_enc_height) / 4);
+
+    vc->h265_encoder = x265_encoder_open(param);
+    // LOGGER_API_WARNING(vc->av->tox, "H265 encoder:h265_encoder=%p", (void *)vc->h265_encoder);
+
+    x265_param_free(param);
+    // LOGGER_API_WARNING(vc->av->tox, "H265 encoder:h265_encoder:ready");
+}
+#endif
+
+VCSession *vc_new_h265(Logger *log, ToxAV *av, uint32_t friend_number, toxav_video_receive_frame_cb *cb, void *cb_data,
+                       VCSession *vc)
+{
+#ifdef HAVE_H265_ENCODER
+    // ENCODER -------
+    LOGGER_API_INFO(av->tox, "H265 encoder init");
+    vc_init_encoder_h265(log, vc, (VIDEO_BITRATE_INITIAL_VALUE_H264 * 1000), 1920, 1080);
+    LOGGER_API_INFO(av->tox, "H265 encoder ready");
+    // ENCODER -------
+#endif
+
+
+    // DECODER -------
+    LOGGER_API_INFO(av->tox, "H265 decoder init");
+
+    AVCodec *codec = NULL;
+    vc->h265_decoder = NULL;
+
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(58, 9, 100)
+    avcodec_register_all();
+#endif
+
+    codec = NULL;
+    codec = avcodec_find_decoder(AV_CODEC_ID_H265);
+
+    if (!codec) {
+        LOGGER_API_WARNING(av->tox, "codec not found H265 on decoder");
+        vc->h265_decoder = NULL;
+    } else {
+
+        vc->h265_decoder = avcodec_alloc_context3(codec);
+        LOGGER_API_INFO(av->tox, "H265 decoder:h265_decoder=%p", (void *)vc->h265_decoder);
+
+        if (codec) {
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(59, 0, 0)
+            vc->h265_decoder->refcounted_frames = 0;
+#endif
+            /*   When AVCodecContext.refcounted_frames is set to 0, the returned
+            *             reference belongs to the decoder and is valid only until the
+            *             next call to this function or until closing or flushing the
+            *             decoder. The caller may not write to it.
+            */
+#pragma GCC diagnostic pop
+
+            vc->h265_decoder->delay = 0;
+            av_opt_set_int(vc->h265_decoder->priv_data, "delay", 0, AV_OPT_SEARCH_CHILDREN);
+
+            vc->h265_decoder->time_base = (AVRational) {
+                1, 20
+            };
+            vc->h265_decoder->framerate = (AVRational) {
+                20, 1
+            };
+
+            if (avcodec_open2(vc->h265_decoder, codec, NULL) < 0) {
+                LOGGER_API_WARNING(av->tox, "could not open codec H265 on decoder");
+            }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(59, 0, 0)
+            vc->h265_decoder->refcounted_frames = 0;
+#endif
+#pragma GCC diagnostic pop
+            /*   When AVCodecContext.refcounted_frames is set to 0, the returned
+            *             reference belongs to the decoder and is valid only until the
+            *             next call to this function or until closing or flushing the
+            *             decoder. The caller may not write to it.
+            */
+
+            LOGGER_API_INFO(av->tox, "H265 decoder:h265_decoder:ready");
+        }
+    }
+
+
+    // DECODER -------
+
+    return vc;
+}
+
+#ifdef HAVE_H265_ENCODER
+static void vc_kill_encoder_h265(VCSession *vc)
+{
+    free(vc->h265_in_pic->planes[0]);
+    free(vc->h265_in_pic->planes[1]);
+    free(vc->h265_in_pic->planes[2]);
+    x265_picture_free(vc->h265_in_pic);
+    x265_picture_free(vc->h265_out_pic);
+    x265_encoder_close(vc->h265_encoder);
+}
+#endif
+
+int vc_reconfigure_encoder_h265(Logger *log, VCSession *vc, uint32_t bit_rate,
+                                uint16_t width, uint16_t height,
+                                int16_t kf_max_dist)
+{
+#ifdef HAVE_H265_ENCODER
+    if (!vc) {
+        return -1;
+    }
+
+    if ((vc->h265_enc_width == width) &&
+            (vc->h265_enc_height == height) &&
+            (vc->h264_enc_bitrate == bit_rate))
+    {
+        // no change
+        return 0;
+    }
+
+    if ((vc->h265_enc_width == width) &&
+            (vc->h265_enc_height == height) &&
+            (vc->h264_enc_bitrate != bit_rate))
+    {
+        // HINT: just bitrate has changed
+        // LOGGER_API_WARNING(vc->av->tox, "vc_reconfigure_encoder_h265:1:bit_rate = %d vc->h264_enc_bitrate = %d", (int)bit_rate, (int)vc->h264_enc_bitrate);
+        x265_param *param = x265_param_alloc();
+        x265_encoder_parameters(vc->h265_encoder, param);
+
+        param->rc.bitrate = (int)(bit_rate / 1000);
+        param->rc.vbvBufferSize = 50 + (((int)(bit_rate / 1000)) * VIDEO_BUF_FACTOR_H264);
+        param->rc.vbvMaxBitrate = ((int)(bit_rate / 1000)) - 1;
+
+        int res = x265_encoder_reconfig(vc->h265_encoder, param);
+        // printf("x265 [****] x265_encoder_reconfig:res=%d bitrate=%d\n", (int)res, (int)(bit_rate / 1000));
+        x265_param_free(param);
+    }
+    else
+    {
+        // HINT: more has changed do a full encoder shutdown and re-init
+        vc_kill_encoder_h265(vc);
+        vc->h265_enc_height = height;
+        vc->h265_enc_width = width;
+        // LOGGER_API_WARNING(vc->av->tox, "vc_reconfigure_encoder_h265:2:bit_rate = %d vc->h264_enc_bitrate = %d", (int)bit_rate, (int)vc->h264_enc_bitrate);
+        vc_init_encoder_h265(log, vc, bit_rate, width, height);
+    }
+
+    vc->h264_enc_bitrate = bit_rate;
+
+#endif
+    return 0;
+}
+
+void decode_frame_h265(VCSession *vc, Tox *tox, uint8_t skip_video_flag, uint64_t *a_r_timestamp,
+                       uint64_t *a_l_timestamp,
+                       uint64_t *v_r_timestamp, uint64_t *v_l_timestamp,
+                       const struct RTPHeader *header_v3,
+                       struct RTPMessage *p, vpx_codec_err_t rc,
+                       uint32_t full_data_len,
+                       uint8_t *ret_value)
+{
+    LOGGER_API_DEBUG(vc->av->tox, "decode_frame_h265:fnum=%d,len=%d", vc->friend_number, full_data_len);
+
+    if (p == NULL) {
+        LOGGER_API_DEBUG(vc->av->tox, "decode_frame_h265:NO data");
+        return;
+    }
+
+    if (full_data_len < 1) {
+        LOGGER_API_DEBUG(vc->av->tox, "decode_frame_h265:not enough data");
+        free(p);
+        p = NULL;
+        return;
+    }
+
+    if (vc->h265_decoder == NULL) {
+        LOGGER_API_DEBUG(vc->av->tox, "vc->h265_decoder:not ready");
+        free(p);
+        p = NULL;
+        return;
+    }
+
+
+    if (vc->global_decode_first_frame_got == 0)
+    {
+        if (vc->global_decode_first_frame_delayed_by == 0)
+        {
+            vc->global_decode_first_frame_delayed_ms = current_time_monotonic(vc->av->toxav_mono_time);
+        }
+        vc->global_decode_first_frame_delayed_by++;
+    }
+
+    AVPacket *compr_data = NULL;
+    compr_data = av_packet_alloc();
+
+    if (compr_data == NULL) {
+        LOGGER_API_DEBUG(vc->av->tox, "av_packet_alloc:ERROR");
+        free(p);
+        p = NULL;
+        return;
+    }
+
+    uint64_t h_frame_record_timestamp = header_v3->frame_record_timestamp;
+
+    compr_data->data = p->data;
+    compr_data->size = (int)full_data_len; // hmm, "int" again
+
+    if (header_v3->frame_record_timestamp > 0) {
+        LOGGER_API_DEBUG(vc->av->tox, "in_pts:%lu", header_v3->frame_record_timestamp);
+        compr_data->dts = (int64_t)(header_v3->frame_record_timestamp) - 1;
+        compr_data->pts = (int64_t)(header_v3->frame_record_timestamp);
+        compr_data->duration = 0; // (int64_t)(header_v3->frame_record_timestamp) + 1; // 0;
+    }
+
+    int result_send_packet = avcodec_send_packet(vc->h265_decoder, compr_data);
+
+    if (result_send_packet != 0) {
+        LOGGER_API_DEBUG(vc->av->tox, "avcodec_send_packet:ERROR=%d", result_send_packet);
+        av_packet_free(&compr_data);
+        free(p);
+        p = NULL;
+        return;
+    }
+
+    /* HINT: this is the only part that takes all the time !!! */
+    /* HINT: this is the only part that takes all the time !!! */
+    /* HINT: this is the only part that takes all the time !!! */
+    /* ------------------------------------------------------- */
+    /* ------------------------------------------------------- */
+
+
+    int ret_ = 0;
+
+    while (ret_ >= 0) {
+
+        // start_time_ms = current_time_monotonic(vc->av->toxav_mono_time);
+        AVFrame *frame = av_frame_alloc();
+
+        if (frame == NULL) {
+            // stop decoding
+            break;
+        }
+
+        ret_ = avcodec_receive_frame(vc->h265_decoder, frame);
+
+        if (ret_ == AVERROR(EAGAIN) || ret_ == AVERROR_EOF) {
+            // error
+            av_frame_free(&frame);
+            break;
+        } else if (ret_ < 0) {
+            // Error during decoding
+            av_frame_free(&frame);
+            break;
+        } else if (ret_ == 0) {
+
+
+        if (vc->global_decode_first_frame_got == 0)
+        {
+            vc->global_decode_first_frame_got = 1;
+            vc->global_decode_first_frame_delayed_ms =
+                current_time_monotonic(vc->av->toxav_mono_time) - vc->global_decode_first_frame_delayed_ms;
+            LOGGER_API_DEBUG(vc->av->tox, "X265 decoder delay: %d f, %d ms",
+                    (vc->global_decode_first_frame_delayed_by - 1),
+                    (int)vc->global_decode_first_frame_delayed_ms);
+        }
+
+
+            if (header_v3->frame_record_timestamp > 0) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(59, 0, 0)
+                int32_t delta_value = (int32_t)(h_frame_record_timestamp - frame->pts);
+#else
+                int32_t delta_value = (int32_t)(h_frame_record_timestamp - frame->pkt_pts);
+#endif
+
+                LOGGER_API_DEBUG(vc->av->tox, "dec:XX:03:%d %d %d %d %d",
+                        delta_value,
+                        (int)h_frame_record_timestamp,
+
+#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(59, 0, 0)
+                        (int)frame->pts,
+#else
+                        (int)frame->pkt_pts,
+#endif
+
+                        (int)frame->pkt_dts,
+                        (int)frame->pts);
+#pragma GCC diagnostic pop
+
+                if ((delta_value >= 0) && (delta_value <= 1000))
+                {
+                    vc->video_decoder_caused_delay_ms = delta_value;
+                    LOGGER_API_DEBUG(vc->av->tox, "dec:1:delta_value=%d", vc->video_decoder_caused_delay_ms);
+                }
+                else if (delta_value == -1)
+                {
+                    // since we do NOT have any idea how long the decoder delays frames,
+                    // and the decoder will lie to us, we just assume some random value
+                    // that works for our use cases (decoding on andriod via MediaCodec)
+                    vc->video_decoder_caused_delay_ms = 1;
+                    LOGGER_API_DEBUG(vc->av->tox, "dec:2:delta_value=%d", vc->video_decoder_caused_delay_ms);
+                }
+
+                // calc mean value
+                vc->video_decoder_caused_delay_ms_array[vc->video_decoder_caused_delay_ms_array_index] = vc->video_decoder_caused_delay_ms;
+                vc->video_decoder_caused_delay_ms_array_index = (vc->video_decoder_caused_delay_ms_array_index + 1) %
+                        VIDEO_DECODER_CAUSED_DELAY_MS_ENTRIES;
+
+                uint32_t mean_value = 0;
+
+                for (int k = 0; k < VIDEO_DECODER_CAUSED_DELAY_MS_ENTRIES; k++) {
+                    mean_value = mean_value + vc->video_decoder_caused_delay_ms_array[k];
+                }
+
+                if (mean_value == 0) {
+                    vc->video_decoder_caused_delay_ms_mean_value = 0;
+                } else {
+                    vc->video_decoder_caused_delay_ms_mean_value = (mean_value * 10) / (VIDEO_DECODER_CAUSED_DELAY_MS_ENTRIES * 10);
+                }
+
+                LOGGER_API_DEBUG(vc->av->tox, "dec:video_decoder_caused_delay_ms_mean_value=%d",
+                        vc->video_decoder_caused_delay_ms_mean_value);
+
+            }
+
+            // start_time_ms = current_time_monotonic(vc->av->toxav_mono_time);
+            if ((frame->data[0] != NULL) && (frame->data[1] != NULL) && (frame->data[2] != NULL)) {
+
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+                *v_r_timestamp = h_frame_record_timestamp;
+                *v_l_timestamp = current_time_monotonic(vc->av->toxav_mono_time);
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+// -------- DEBUG:AUDIO/VIDEO DELAY/LATENCY --------
+
+                if (vc->vcb_pts)
+                {
+                    uint64_t pts_for_client = h_frame_record_timestamp;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
+#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(59, 0, 0)
+                    int32_t delta_check = (int32_t)(h_frame_record_timestamp - frame->pts);
+#else
+                    int32_t delta_check = (int32_t)(h_frame_record_timestamp - frame->pkt_pts);
+#endif
+
+                    if ((delta_check >= 0) && (delta_check <= 600))
+                    {
+
+#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(59, 0, 0)
+                        pts_for_client = frame->pts;
+#else
+                        pts_for_client = frame->pkt_pts;
+#endif
+                    }
+#pragma GCC diagnostic pop
+
+                    LOGGER_API_DEBUG(vc->av->tox, "DDDDDDDDDD:%lu", pts_for_client);
+                    vc->vcb_pts(vc->av, vc->friend_number, frame->width, frame->height,
+                            (const uint8_t *)frame->data[0],
+                            (const uint8_t *)frame->data[1],
+                            (const uint8_t *)frame->data[2],
+                            frame->linesize[0], frame->linesize[1],
+                            frame->linesize[2], vc->vcb_pts_user_data,
+                            pts_for_client);
+                }
+                else
+                {
+                    vc->vcb(vc->av, vc->friend_number, frame->width, frame->height,
+                            (const uint8_t *)frame->data[0],
+                            (const uint8_t *)frame->data[1],
+                            (const uint8_t *)frame->data[2],
+                            frame->linesize[0], frame->linesize[1],
+                            frame->linesize[2], vc->vcb_user_data);
+                }
+            }
+
+        } else {
+            // some other error
+        }
+
+        av_frame_free(&frame);
+    }
+
+    av_packet_free(&compr_data);
+    free(p);
+
+    return;
+}
+
+#ifdef HAVE_H265_ENCODER
+uint32_t encode_frame_h265(ToxAV *av, uint32_t friend_number, uint16_t width, uint16_t height,
+                           const uint8_t *y,
+                           const uint8_t *u, const uint8_t *v, ToxAVCall *call,
+                           uint64_t *video_frame_record_timestamp,
+                           int vpx_encode_flags,
+                           int *x265_num_nals,
+                           x264_nal_t **nal,
+                           int *i_frame_size, x265_nal** h265_nals)
+{
+    uint32_t i_nal;
+
+    LOGGER_API_DEBUG(av->tox, "encode_frame_h265:start");
+
+    call->video->h265_in_pic->pts = (int64_t)(*video_frame_record_timestamp);
+    LOGGER_API_DEBUG(av->tox, "X265:in_ts:%lu", (*video_frame_record_timestamp));
+
+
+    memcpy(call->video->h265_in_pic->planes[0], y, (width * height));
+    memcpy(call->video->h265_in_pic->planes[1], u, (width / 2) * (height / 2));
+    memcpy(call->video->h265_in_pic->planes[2], v, (width / 2) * (height / 2));
+    x265_encoder_encode(call->video->h265_encoder, h265_nals, &i_nal, call->video->h265_in_pic, call->video->h265_out_pic);
+
+    *video_frame_record_timestamp = (uint64_t)call->video->h265_out_pic->pts;
+    LOGGER_API_DEBUG(av->tox, "X265:out_ts:%lu", (*video_frame_record_timestamp));
+    LOGGER_API_DEBUG(av->tox, "X265:out_ts:dts:%d", (int)call->video->h265_out_pic->dts);
+    LOGGER_API_DEBUG(av->tox, "X265:out_ts:pts:%d", (int)call->video->h265_out_pic->pts);
+
+    *x265_num_nals = 0;
+
+    if (*h265_nals == NULL) {
+        return 1;
+    }
+
+    if (i_nal < 1) {
+        return 1;
+    }
+
+    *x265_num_nals = (int)i_nal;
+    *i_frame_size = (*h265_nals)[0].sizeBytes;
+
+    if (*i_frame_size < 0) {
+        // some error
+    } else if (*i_frame_size == 0) {
+        // zero size output
+    }
+
+    if ((*h265_nals)[0].payload == NULL) {
+        LOGGER_API_WARNING(av->tox, "X265:ERR:099");
+        return 1;
+    }
+
+    LOGGER_API_DEBUG(av->tox, "X265:done");
+    return 0;
+}
+#endif
+
+#ifdef HAVE_H265_ENCODER
+uint32_t send_frames_h265(ToxAV *av, uint32_t friend_number, uint16_t width, uint16_t height,
+                          const uint8_t *y,
+                          const uint8_t *u, const uint8_t *v, ToxAVCall *call,
+                          uint64_t *video_frame_record_timestamp,
+                          int vpx_encode_flags,
+                          x264_nal_t **nal,
+                          int *i_frame_size,
+                          int x265_num_nals,
+                          x265_nal** h265_nals,
+                          TOXAV_ERR_SEND_FRAME *rc)
+{
+
+    // Process the encoded data (NAL units)
+    uint32_t need_buffer_bytes = 0;
+    for (uint32_t i = 0; i < x265_num_nals; i++) {
+        LOGGER_API_DEBUG(av->tox, "nal #%d", i);
+        LOGGER_API_DEBUG(av->tox, "bytes: %d", (int)(*h265_nals)[i].sizeBytes);
+        need_buffer_bytes = need_buffer_bytes + (*h265_nals)[i].sizeBytes;
+    }
+
+    if (need_buffer_bytes > 0) {
+        uint8_t *needed_buffer = malloc(need_buffer_bytes);
+        if (needed_buffer == nullptr) {
+            *rc = TOXAV_ERR_SEND_FRAME_RTP_FAILED;
+            return 1;
+        }
+
+        uint8_t *p1 = needed_buffer;
+        for (uint32_t i = 0; i < x265_num_nals; i++) {
+            memcpy(p1, (const uint8_t *)(*h265_nals)[i].payload, (*h265_nals)[i].sizeBytes);
+            p1 = p1 + (*h265_nals)[i].sizeBytes;
+        }
+
+        LOGGER_API_DEBUG(av->tox, "X265:send_ts:%lu", (*video_frame_record_timestamp));
+        const uint32_t frame_length_in_bytes = need_buffer_bytes;
+        LOGGER_API_DEBUG(av->tox, "X265:sizebytes:%d", need_buffer_bytes);
+
+        int res = rtp_send_data
+                  (
+                      call->video_rtp,
+                      needed_buffer,
+                      need_buffer_bytes,
+                      0,
+                      *video_frame_record_timestamp,
+                      (int32_t)0,
+                      TOXAV_ENCODER_CODEC_USED_H265,
+                      call->video_bit_rate,
+                      call->video->client_video_capture_delay_ms,
+                      call->video->video_encoder_frame_orientation_angle,
+                      nullptr
+                  );
+        (*video_frame_record_timestamp)++;
+
+        free(needed_buffer);
+
+        if (res < 0) {
+            LOGGER_API_WARNING(av->tox, "Could not send video frame: %s", strerror(errno));
+            *rc = TOXAV_ERR_SEND_FRAME_RTP_FAILED;
+            return 1;
+        } else {
+            LOGGER_API_DEBUG(av->tox, "send video frame OK");
+        }
+
+        return 0;
+    } else {
+        *rc = TOXAV_ERR_SEND_FRAME_RTP_FAILED;
+        return 1;
+    }
+}
+#endif
+
+void vc_kill_h265(VCSession *vc)
+{
+#ifdef HAVE_H265_ENCODER
+    // encoder
+    vc_kill_encoder_h265(vc);
+#endif
+
+    // decoder
+    if (vc->h265_decoder != nullptr) {
+        if (vc->h265_decoder->extradata) {
+            av_free(vc->h265_decoder->extradata);
+            vc->h265_decoder->extradata = NULL;
+        }
+        avcodec_free_context(&vc->h265_decoder);
+        vc->h265_decoder = NULL;
+    }
+}
+
 /*
  * Copyright © 2018 zoff@zoff.cc and mail@strfry.org
  *
@@ -82533,7 +83807,7 @@ int vc_reconfigure_encoder_vpx(Logger *log, VCSession *vc, uint32_t bit_rate,
     vpx_codec_enc_cfg_t cfg2 = *vc->encoder->config.enc;
     vpx_codec_err_t rc;
 
-    if (cfg2.rc_target_bitrate == bit_rate && cfg2.g_w == width && cfg2.g_h == height && kf_max_dist == -1
+    if (cfg2.rc_target_bitrate == (bit_rate / 1000) && cfg2.g_w == width && cfg2.g_h == height && kf_max_dist == -1
             && vc->video_encoder_cpu_used == vc->video_encoder_cpu_used_prev
             && vc->video_encoder_vp8_quality == vc->video_encoder_vp8_quality_prev
             && vc->video_rc_max_quantizer == vc->video_rc_max_quantizer_prev
@@ -82557,6 +83831,7 @@ int vc_reconfigure_encoder_vpx(Logger *log, VCSession *vc, uint32_t bit_rate,
         // LOGGER_DEBUG(vc->log, "bitrate change from: %u to: %u", (uint32_t)(cfg2.rc_target_bitrate / 1000),
         //              (uint32_t)(bit_rate / 1000));
 
+        // VP8 needs this in kilobits per second!
         cfg2.rc_target_bitrate = (bit_rate / 1000);
 
         rc = vpx_codec_enc_config_set(vc->encoder, &cfg2);
@@ -82590,6 +83865,7 @@ int vc_reconfigure_encoder_vpx(Logger *log, VCSession *vc, uint32_t bit_rate,
         vc->video_rc_min_quantizer_prev = vc->video_rc_min_quantizer;
         vc->video_keyframe_method_prev = vc->video_keyframe_method;
 
+        // VP8 needs this in kilobits per second!
         cfg.rc_target_bitrate = (bit_rate / 1000);
         cfg.g_w = width;
         cfg.g_h = height;
@@ -83079,30 +84355,15 @@ void vc_kill_vpx(VCSession *vc)
     vpx_codec_destroy(vc->decoder);
 }
 
-/*
-The MIT License (MIT)
+/* SPDX-License-Identifier: MIT
+ * Copyright © 2020-2024 Charles Gunyon.
+ */
 
-Copyright (c) 2020 Charles Gunyon
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
-
+#ifdef __cplusplus
+#define CMP_NULL nullptr
+#else
+#define CMP_NULL NULL
+#endif /* __cplusplus */
 
 static const uint32_t cmp_version_ = 20;
 static const uint32_t cmp_mp_version_ = 5;
@@ -83152,67 +84413,69 @@ enum {
   FIXSTR_SIZE   = 0x1F
 };
 
-enum {
-  ERROR_NONE,
-  STR_DATA_LENGTH_TOO_LONG_ERROR,
-  BIN_DATA_LENGTH_TOO_LONG_ERROR,
-  ARRAY_LENGTH_TOO_LONG_ERROR,
-  MAP_LENGTH_TOO_LONG_ERROR,
-  INPUT_VALUE_TOO_LARGE_ERROR,
-  FIXED_VALUE_WRITING_ERROR,
-  TYPE_MARKER_READING_ERROR,
-  TYPE_MARKER_WRITING_ERROR,
-  DATA_READING_ERROR,
-  DATA_WRITING_ERROR,
-  EXT_TYPE_READING_ERROR,
-  EXT_TYPE_WRITING_ERROR,
-  INVALID_TYPE_ERROR,
-  LENGTH_READING_ERROR,
-  LENGTH_WRITING_ERROR,
-  SKIP_DEPTH_LIMIT_EXCEEDED_ERROR,
-  INTERNAL_ERROR,
-  DISABLED_FLOATING_POINT_ERROR,
-  ERROR_MAX
-};
+typedef enum cmp_error_t {
+  CMP_ERROR_NONE,
+  CMP_ERROR_STR_DATA_LENGTH_TOO_LONG,
+  CMP_ERROR_BIN_DATA_LENGTH_TOO_LONG,
+  CMP_ERROR_ARRAY_LENGTH_TOO_LONG,
+  CMP_ERROR_MAP_LENGTH_TOO_LONG,
+  CMP_ERROR_INPUT_VALUE_TOO_LARGE,
+  CMP_ERROR_FIXED_VALUE_WRITING,
+  CMP_ERROR_TYPE_MARKER_READING,
+  CMP_ERROR_TYPE_MARKER_WRITING,
+  CMP_ERROR_DATA_READING,
+  CMP_ERROR_DATA_WRITING,
+  CMP_ERROR_EXT_TYPE_READING,
+  CMP_ERROR_EXT_TYPE_WRITING,
+  CMP_ERROR_INVALID_TYPE,
+  CMP_ERROR_LENGTH_READING,
+  CMP_ERROR_LENGTH_WRITING,
+  CMP_ERROR_SKIP_DEPTH_LIMIT_EXCEEDED,
+  CMP_ERROR_INTERNAL,
+  CMP_ERROR_DISABLED_FLOATING_POINT,
+  CMP_ERROR_MAX
+} cmp_error_t;
 
-static const char * const cmp_error_messages[ERROR_MAX + 1] = {
-  "No Error",
-  "Specified string data length is too long (> 0xFFFFFFFF)",
-  "Specified binary data length is too long (> 0xFFFFFFFF)",
-  "Specified array length is too long (> 0xFFFFFFFF)",
-  "Specified map length is too long (> 0xFFFFFFFF)",
-  "Input value is too large",
-  "Error writing fixed value",
-  "Error reading type marker",
-  "Error writing type marker",
-  "Error reading packed data",
-  "Error writing packed data",
-  "Error reading ext type",
-  "Error writing ext type",
-  "Invalid type",
-  "Error reading size",
-  "Error writing size",
-  "Depth limit exceeded while skipping",
-  "Internal error",
-  "Floating point operations disabled",
-  "Max Error"
-};
+static const char *cmp_error_message(cmp_error_t error) {
+  switch (error) {
+    case CMP_ERROR_NONE:                      return "No Error";
+    case CMP_ERROR_STR_DATA_LENGTH_TOO_LONG:  return "Specified string data length is too long (> 0xFFFFFFFF)";
+    case CMP_ERROR_BIN_DATA_LENGTH_TOO_LONG:  return "Specified binary data length is too long (> 0xFFFFFFFF)";
+    case CMP_ERROR_ARRAY_LENGTH_TOO_LONG:     return "Specified array length is too long (> 0xFFFFFFFF)";
+    case CMP_ERROR_MAP_LENGTH_TOO_LONG:       return "Specified map length is too long (> 0xFFFFFFFF)";
+    case CMP_ERROR_INPUT_VALUE_TOO_LARGE:     return "Input value is too large";
+    case CMP_ERROR_FIXED_VALUE_WRITING:       return "Error writing fixed value";
+    case CMP_ERROR_TYPE_MARKER_READING:       return "Error reading type marker";
+    case CMP_ERROR_TYPE_MARKER_WRITING:       return "Error writing type marker";
+    case CMP_ERROR_DATA_READING:              return "Error reading packed data";
+    case CMP_ERROR_DATA_WRITING:              return "Error writing packed data";
+    case CMP_ERROR_EXT_TYPE_READING:          return "Error reading ext type";
+    case CMP_ERROR_EXT_TYPE_WRITING:          return "Error writing ext type";
+    case CMP_ERROR_INVALID_TYPE:              return "Invalid type";
+    case CMP_ERROR_LENGTH_READING:            return "Error reading size";
+    case CMP_ERROR_LENGTH_WRITING:            return "Error writing size";
+    case CMP_ERROR_SKIP_DEPTH_LIMIT_EXCEEDED: return "Depth limit exceeded while skipping";
+    case CMP_ERROR_INTERNAL:                  return "Internal error";
+    case CMP_ERROR_DISABLED_FLOATING_POINT:   return "Floating point operations disabled";
+    case CMP_ERROR_MAX:                       return "Max Error";
+  }
+  return "";
+}
 
+static bool is_bigendian(void) {
 #ifdef WORDS_BIGENDIAN
-#define is_bigendian() (WORDS_BIGENDIAN)
+  return WORDS_BIGENDIAN;
 #else
-static const int32_t i_ = 1;
-#define is_bigendian() ((*(const char *)&i_) == 0)
-#endif
+  const int32_t i_ = 1;
+  const char *i_bytes = (const char *)&i_;
+  return *i_bytes == 0;
+#endif /* WORDS_BIGENDIAN */
+}
 
 static uint16_t be16(uint16_t x) {
-  char *b = (char *)&x;
-
-  if (!is_bigendian()) {
-    char swap = b[0];
-    b[0] = b[1];
-    b[1] = swap;
-  }
+  if (!is_bigendian())
+    return ((x >> 8) & 0x00ff)
+         | ((x << 8) & 0xff00);
 
   return x;
 }
@@ -83222,17 +84485,8 @@ static int16_t sbe16(int16_t x) {
 }
 
 static uint32_t be32(uint32_t x) {
-  char *b = (char *)&x;
-
-  if (!is_bigendian()) {
-    char swap = b[0];
-    b[0] = b[3];
-    b[3] = swap;
-
-    swap = b[1];
-    b[1] = b[2];
-    b[2] = swap;
-  }
+  if (!is_bigendian())
+    return ((uint32_t)be16((uint16_t)(x & 0xffff)) << 16) | (uint32_t)be16((uint16_t)(x >> 16));
 
   return x;
 }
@@ -83242,27 +84496,8 @@ static int32_t sbe32(int32_t x) {
 }
 
 static uint64_t be64(uint64_t x) {
-  char *b = (char *)&x;
-
-  if (!is_bigendian()) {
-    char swap;
-
-    swap = b[0];
-    b[0] = b[7];
-    b[7] = swap;
-
-    swap = b[1];
-    b[1] = b[6];
-    b[6] = swap;
-
-    swap = b[2];
-    b[2] = b[5];
-    b[5] = swap;
-
-    swap = b[3];
-    b[3] = b[4];
-    b[4] = swap;
-  }
+  if (!is_bigendian())
+    return ((uint64_t)be32((uint32_t)(x & 0xffffffff)) << 32) | (uint64_t)be32((uint32_t)(x >> 32));
 
   return x;
 }
@@ -83273,7 +84508,7 @@ static int64_t sbe64(int64_t x) {
 
 #ifndef CMP_NO_FLOAT
 static float decode_befloat(const char *b) {
-  float f = 0.;
+  float f = 0.0;
   char *fb = (char *)&f;
 
   if (!is_bigendian()) {
@@ -83293,7 +84528,7 @@ static float decode_befloat(const char *b) {
 }
 
 static double decode_bedouble(const char *b) {
-  double d = 0.;
+  double d = 0.0;
   char *db = (char *)&d;
 
   if (!is_bigendian()) {
@@ -83326,18 +84561,17 @@ static bool read_byte(cmp_ctx_t *ctx, uint8_t *x) {
 }
 
 static bool write_byte(cmp_ctx_t *ctx, uint8_t x) {
-  return (ctx->write(ctx, &x, sizeof(uint8_t)) == (sizeof(uint8_t)));
+  return ctx->write(ctx, &x, sizeof(uint8_t)) == sizeof(uint8_t);
 }
 
 static bool skip_bytes(cmp_ctx_t *ctx, size_t count) {
-  if (ctx->skip) {
+  if (ctx->skip != CMP_NULL) {
     return ctx->skip(ctx, count);
   }
   else {
-    uint8_t floor;
     size_t i;
-
-    for (i = 0; i < count; i++) {
+    for (i = 0; i < count; ++i) {
+      uint8_t floor;
       if (!ctx->read(ctx, &floor, sizeof(uint8_t))) {
         return false;
       }
@@ -83352,7 +84586,7 @@ static bool read_type_marker(cmp_ctx_t *ctx, uint8_t *marker) {
     return true;
   }
 
-  ctx->error = TYPE_MARKER_READING_ERROR;
+  ctx->error = CMP_ERROR_TYPE_MARKER_READING;
   return false;
 }
 
@@ -83360,7 +84594,7 @@ static bool write_type_marker(cmp_ctx_t *ctx, uint8_t marker) {
   if (write_byte(ctx, marker))
     return true;
 
-  ctx->error = TYPE_MARKER_WRITING_ERROR;
+  ctx->error = CMP_ERROR_TYPE_MARKER_WRITING;
   return false;
 }
 
@@ -83368,7 +84602,7 @@ static bool write_fixed_value(cmp_ctx_t *ctx, uint8_t value) {
   if (write_byte(ctx, value))
     return true;
 
-  ctx->error = FIXED_VALUE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_FIXED_VALUE_WRITING;
   return false;
 }
 
@@ -83399,101 +84633,133 @@ static bool type_marker_to_cmp_type(uint8_t type_marker, uint8_t *cmp_type) {
   }
 
   switch (type_marker) {
-    case NIL_MARKER:
+    case NIL_MARKER: {
       *cmp_type = CMP_TYPE_NIL;
       return true;
-    case FALSE_MARKER:
+    }
+    case FALSE_MARKER: {
       *cmp_type = CMP_TYPE_BOOLEAN;
       return true;
-    case TRUE_MARKER:
+    }
+    case TRUE_MARKER: {
       *cmp_type = CMP_TYPE_BOOLEAN;
       return true;
-    case BIN8_MARKER:
+    }
+    case BIN8_MARKER: {
       *cmp_type = CMP_TYPE_BIN8;
       return true;
-    case BIN16_MARKER:
+    }
+    case BIN16_MARKER: {
       *cmp_type = CMP_TYPE_BIN16;
       return true;
-    case BIN32_MARKER:
+    }
+    case BIN32_MARKER: {
       *cmp_type = CMP_TYPE_BIN32;
       return true;
-    case EXT8_MARKER:
+    }
+    case EXT8_MARKER: {
       *cmp_type = CMP_TYPE_EXT8;
       return true;
-    case EXT16_MARKER:
+    }
+    case EXT16_MARKER: {
       *cmp_type = CMP_TYPE_EXT16;
       return true;
-    case EXT32_MARKER:
+    }
+    case EXT32_MARKER: {
       *cmp_type = CMP_TYPE_EXT32;
       return true;
-    case FLOAT_MARKER:
+    }
+    case FLOAT_MARKER: {
       *cmp_type = CMP_TYPE_FLOAT;
       return true;
-    case DOUBLE_MARKER:
+    }
+    case DOUBLE_MARKER: {
       *cmp_type = CMP_TYPE_DOUBLE;
       return true;
-    case U8_MARKER:
+    }
+    case U8_MARKER: {
       *cmp_type = CMP_TYPE_UINT8;
       return true;
-    case U16_MARKER:
+    }
+    case U16_MARKER: {
       *cmp_type = CMP_TYPE_UINT16;
       return true;
-    case U32_MARKER:
+    }
+    case U32_MARKER: {
       *cmp_type = CMP_TYPE_UINT32;
       return true;
-    case U64_MARKER:
+    }
+    case U64_MARKER: {
       *cmp_type = CMP_TYPE_UINT64;
       return true;
-    case S8_MARKER:
+    }
+    case S8_MARKER: {
       *cmp_type = CMP_TYPE_SINT8;
       return true;
-    case S16_MARKER:
+    }
+    case S16_MARKER: {
       *cmp_type = CMP_TYPE_SINT16;
       return true;
-    case S32_MARKER:
+    }
+    case S32_MARKER: {
       *cmp_type = CMP_TYPE_SINT32;
       return true;
-    case S64_MARKER:
+    }
+    case S64_MARKER: {
       *cmp_type = CMP_TYPE_SINT64;
       return true;
-    case FIXEXT1_MARKER:
+    }
+    case FIXEXT1_MARKER: {
       *cmp_type = CMP_TYPE_FIXEXT1;
       return true;
-    case FIXEXT2_MARKER:
+    }
+    case FIXEXT2_MARKER: {
       *cmp_type = CMP_TYPE_FIXEXT2;
       return true;
-    case FIXEXT4_MARKER:
+    }
+    case FIXEXT4_MARKER: {
       *cmp_type = CMP_TYPE_FIXEXT4;
       return true;
-    case FIXEXT8_MARKER:
+    }
+    case FIXEXT8_MARKER: {
       *cmp_type = CMP_TYPE_FIXEXT8;
       return true;
-    case FIXEXT16_MARKER:
+    }
+    case FIXEXT16_MARKER: {
       *cmp_type = CMP_TYPE_FIXEXT16;
       return true;
-    case STR8_MARKER:
+    }
+    case STR8_MARKER: {
       *cmp_type = CMP_TYPE_STR8;
       return true;
-    case STR16_MARKER:
+    }
+    case STR16_MARKER: {
       *cmp_type = CMP_TYPE_STR16;
       return true;
-    case STR32_MARKER:
+    }
+    case STR32_MARKER: {
       *cmp_type = CMP_TYPE_STR32;
       return true;
-    case ARRAY16_MARKER:
+    }
+    case ARRAY16_MARKER: {
       *cmp_type = CMP_TYPE_ARRAY16;
       return true;
-    case ARRAY32_MARKER:
+    }
+    case ARRAY32_MARKER: {
       *cmp_type = CMP_TYPE_ARRAY32;
       return true;
-    case MAP16_MARKER:
+    }
+    case MAP16_MARKER: {
       *cmp_type = CMP_TYPE_MAP16;
       return true;
-    case MAP32_MARKER:
+    }
+    case MAP32_MARKER: {
       *cmp_type = CMP_TYPE_MAP32;
       return true;
-    default:
+    }
+    default: {
       return false;
+    }
   }
 }
 
@@ -83505,277 +84771,325 @@ static bool read_type_size(cmp_ctx_t *ctx, uint8_t type_marker,
   uint32_t u32temp = 0;
 
   switch (cmp_type) {
-    case CMP_TYPE_POSITIVE_FIXNUM:
+    case CMP_TYPE_POSITIVE_FIXNUM: {
       *size = 0;
       return true;
-    case CMP_TYPE_FIXMAP:
-      *size = (type_marker & FIXMAP_SIZE);
+    }
+    case CMP_TYPE_FIXMAP: {
+      *size = type_marker & FIXMAP_SIZE;
       return true;
-    case CMP_TYPE_FIXARRAY:
-      *size = (type_marker & FIXARRAY_SIZE);
+    }
+    case CMP_TYPE_FIXARRAY: {
+      *size = type_marker & FIXARRAY_SIZE;
       return true;
-    case CMP_TYPE_FIXSTR:
-      *size = (type_marker & FIXSTR_SIZE);
+    }
+    case CMP_TYPE_FIXSTR: {
+      *size = type_marker & FIXSTR_SIZE;
       return true;
-    case CMP_TYPE_NIL:
+    }
+    case CMP_TYPE_NIL: {
       *size = 0;
       return true;
-    case CMP_TYPE_BOOLEAN:
+    }
+    case CMP_TYPE_BOOLEAN: {
       *size = 0;
       return true;
-    case CMP_TYPE_BIN8:
+    }
+    case CMP_TYPE_BIN8: {
       if (!ctx->read(ctx, &u8temp, sizeof(uint8_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = u8temp;
       return true;
-    case CMP_TYPE_BIN16:
+    }
+    case CMP_TYPE_BIN16: {
       if (!ctx->read(ctx, &u16temp, sizeof(uint16_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = be16(u16temp);
       return true;
-    case CMP_TYPE_BIN32:
+    }
+    case CMP_TYPE_BIN32: {
       if (!ctx->read(ctx, &u32temp, sizeof(uint32_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = be32(u32temp);
       return true;
-    case CMP_TYPE_EXT8:
+    }
+    case CMP_TYPE_EXT8: {
       if (!ctx->read(ctx, &u8temp, sizeof(uint8_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = u8temp;
       return true;
-    case CMP_TYPE_EXT16:
+    }
+    case CMP_TYPE_EXT16: {
       if (!ctx->read(ctx, &u16temp, sizeof(uint16_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = be16(u16temp);
       return true;
-    case CMP_TYPE_EXT32:
+    }
+    case CMP_TYPE_EXT32: {
       if (!ctx->read(ctx, &u32temp, sizeof(uint32_t))) {
-        ctx->error = LENGTH_READING_ERROR;
+        ctx->error = CMP_ERROR_LENGTH_READING;
         return false;
       }
       *size = be32(u32temp);
       return true;
-    case CMP_TYPE_FLOAT:
+    }
+    case CMP_TYPE_FLOAT: {
       *size = 4;
       return true;
-    case CMP_TYPE_DOUBLE:
+    }
+    case CMP_TYPE_DOUBLE: {
       *size = 8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *size = 1;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *size = 2;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *size = 4;
       return true;
-    case CMP_TYPE_UINT64:
+    }
+    case CMP_TYPE_UINT64: {
       *size = 8;
       return true;
-    case CMP_TYPE_SINT8:
+    }
+    case CMP_TYPE_SINT8: {
       *size = 1;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *size = 2;
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       *size = 4;
       return true;
-    case CMP_TYPE_SINT64:
+    }
+    case CMP_TYPE_SINT64: {
       *size = 8;
       return true;
-    case CMP_TYPE_FIXEXT1:
+    }
+    case CMP_TYPE_FIXEXT1: {
       *size = 1;
       return true;
-    case CMP_TYPE_FIXEXT2:
+    }
+    case CMP_TYPE_FIXEXT2: {
       *size = 2;
       return true;
-    case CMP_TYPE_FIXEXT4:
+    }
+    case CMP_TYPE_FIXEXT4: {
       *size = 4;
       return true;
-    case CMP_TYPE_FIXEXT8:
+    }
+    case CMP_TYPE_FIXEXT8: {
       *size = 8;
       return true;
-    case CMP_TYPE_FIXEXT16:
+    }
+    case CMP_TYPE_FIXEXT16: {
       *size = 16;
       return true;
-    case CMP_TYPE_STR8:
+    }
+    case CMP_TYPE_STR8: {
       if (!ctx->read(ctx, &u8temp, sizeof(uint8_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = u8temp;
       return true;
-    case CMP_TYPE_STR16:
+    }
+    case CMP_TYPE_STR16: {
       if (!ctx->read(ctx, &u16temp, sizeof(uint16_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be16(u16temp);
       return true;
-    case CMP_TYPE_STR32:
+    }
+    case CMP_TYPE_STR32: {
       if (!ctx->read(ctx, &u32temp, sizeof(uint32_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be32(u32temp);
       return true;
-    case CMP_TYPE_ARRAY16:
+    }
+    case CMP_TYPE_ARRAY16: {
       if (!ctx->read(ctx, &u16temp, sizeof(uint16_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be16(u16temp);
       return true;
-    case CMP_TYPE_ARRAY32:
+    }
+    case CMP_TYPE_ARRAY32: {
       if (!ctx->read(ctx, &u32temp, sizeof(uint32_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be32(u32temp);
       return true;
-    case CMP_TYPE_MAP16:
+    }
+    case CMP_TYPE_MAP16: {
       if (!ctx->read(ctx, &u16temp, sizeof(uint16_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be16(u16temp);
       return true;
-    case CMP_TYPE_MAP32:
+    }
+    case CMP_TYPE_MAP32: {
       if (!ctx->read(ctx, &u32temp, sizeof(uint32_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       *size = be32(u32temp);
       return true;
-    case CMP_TYPE_NEGATIVE_FIXNUM:
+    }
+    case CMP_TYPE_NEGATIVE_FIXNUM: {
       *size = 0;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
 static bool read_obj_data(cmp_ctx_t *ctx, uint8_t type_marker,
                                           cmp_object_t *obj) {
   switch (obj->type) {
-    case CMP_TYPE_POSITIVE_FIXNUM:
+    case CMP_TYPE_POSITIVE_FIXNUM: {
       obj->as.u8 = type_marker;
       return true;
-    case CMP_TYPE_NEGATIVE_FIXNUM:
+    }
+    case CMP_TYPE_NEGATIVE_FIXNUM: {
       obj->as.s8 = (int8_t)type_marker;
       return true;
-    case CMP_TYPE_NIL:
+    }
+    case CMP_TYPE_NIL: {
       obj->as.u8 = 0;
       return true;
-    case CMP_TYPE_BOOLEAN:
+    }
+    case CMP_TYPE_BOOLEAN: {
       switch (type_marker) {
-        case TRUE_MARKER:
+        case TRUE_MARKER: {
           obj->as.boolean = true;
           return true;
-        case FALSE_MARKER:
+        }
+        case FALSE_MARKER: {
           obj->as.boolean = false;
           return true;
+        }
         default:
           break;
       }
-      ctx->error = INTERNAL_ERROR;
+      ctx->error = CMP_ERROR_INTERNAL;
       return false;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       if (!ctx->read(ctx, &obj->as.u8, sizeof(uint8_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       if (!ctx->read(ctx, &obj->as.u16, sizeof(uint16_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.u16 = be16(obj->as.u16);
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       if (!ctx->read(ctx, &obj->as.u32, sizeof(uint32_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.u32 = be32(obj->as.u32);
       return true;
-    case CMP_TYPE_UINT64:
+    }
+    case CMP_TYPE_UINT64: {
       if (!ctx->read(ctx, &obj->as.u64, sizeof(uint64_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.u64 = be64(obj->as.u64);
       return true;
-    case CMP_TYPE_SINT8:
+    }
+    case CMP_TYPE_SINT8: {
       if (!ctx->read(ctx, &obj->as.s8, sizeof(int8_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       if (!ctx->read(ctx, &obj->as.s16, sizeof(int16_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.s16 = sbe16(obj->as.s16);
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       if (!ctx->read(ctx, &obj->as.s32, sizeof(int32_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.s32 = sbe32(obj->as.s32);
       return true;
-    case CMP_TYPE_SINT64:
+    }
+    case CMP_TYPE_SINT64: {
       if (!ctx->read(ctx, &obj->as.s64, sizeof(int64_t))) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.s64 = sbe64(obj->as.s64);
       return true;
-    case CMP_TYPE_FLOAT:
-    {
+    }
+    case CMP_TYPE_FLOAT: {
 #ifndef CMP_NO_FLOAT
       char bytes[4];
 
       if (!ctx->read(ctx, bytes, 4)) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.flt = decode_befloat(bytes);
       return true;
 #else /* CMP_NO_FLOAT */
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
 #endif /* CMP_NO_FLOAT */
     }
-    case CMP_TYPE_DOUBLE:
-    {
+    case CMP_TYPE_DOUBLE: {
 #ifndef CMP_NO_FLOAT
       char bytes[8];
 
       if (!ctx->read(ctx, bytes, 8)) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       obj->as.dbl = decode_bedouble(bytes);
       return true;
 #else /* CMP_NO_FLOAT */
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
 #endif /* CMP_NO_FLOAT */
     }
@@ -83796,80 +85110,88 @@ static bool read_obj_data(cmp_ctx_t *ctx, uint8_t type_marker,
     case CMP_TYPE_MAP16:
     case CMP_TYPE_MAP32:
       return read_type_size(ctx, type_marker, obj->type, &obj->as.map_size);
-    case CMP_TYPE_FIXEXT1:
+    case CMP_TYPE_FIXEXT1: {
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       obj->as.ext.size = 1;
       return true;
-    case CMP_TYPE_FIXEXT2:
+    }
+    case CMP_TYPE_FIXEXT2: {
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       obj->as.ext.size = 2;
       return true;
-    case CMP_TYPE_FIXEXT4:
+    }
+    case CMP_TYPE_FIXEXT4: {
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       obj->as.ext.size = 4;
       return true;
-    case CMP_TYPE_FIXEXT8:
+    }
+    case CMP_TYPE_FIXEXT8: {
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       obj->as.ext.size = 8;
       return true;
-    case CMP_TYPE_FIXEXT16:
+    }
+    case CMP_TYPE_FIXEXT16: {
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       obj->as.ext.size = 16;
       return true;
-    case CMP_TYPE_EXT8:
+    }
+    case CMP_TYPE_EXT8: {
       if (!read_type_size(ctx, type_marker, obj->type, &obj->as.ext.size)) {
         return false;
       }
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       return true;
-    case CMP_TYPE_EXT16:
+    }
+    case CMP_TYPE_EXT16: {
       if (!read_type_size(ctx, type_marker, obj->type, &obj->as.ext.size)) {
         return false;
       }
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       return true;
-    case CMP_TYPE_EXT32:
+    }
+    case CMP_TYPE_EXT32: {
       if (!read_type_size(ctx, type_marker, obj->type, &obj->as.ext.size)) {
         return false;
       }
       if (!ctx->read(ctx, &obj->as.ext.type, sizeof(int8_t))) {
-        ctx->error = EXT_TYPE_READING_ERROR;
+        ctx->error = CMP_ERROR_EXT_TYPE_READING;
         return false;
       }
       return true;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
-void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader read,
-                                         cmp_skipper skip,
-                                         cmp_writer write) {
-  ctx->error = ERROR_NONE;
+void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader *read,
+                                         cmp_skipper *skip,
+                                         cmp_writer *write) {
+  ctx->error = CMP_ERROR_NONE;
   ctx->buf = buf;
   ctx->read = read;
   ctx->skip = skip;
@@ -83884,10 +85206,9 @@ uint32_t cmp_mp_version(void) {
   return cmp_mp_version_;
 }
 
-const char* cmp_strerror(cmp_ctx_t *ctx) {
-  if (ctx->error > ERROR_NONE && ctx->error < ERROR_MAX)
-    return cmp_error_messages[ctx->error];
-
+const char* cmp_strerror(const cmp_ctx_t *ctx) {
+  if (ctx->error > CMP_ERROR_NONE && ctx->error < CMP_ERROR_MAX)
+    return cmp_error_message((cmp_error_t)ctx->error);
   return "";
 }
 
@@ -83895,25 +85216,25 @@ bool cmp_write_pfix(cmp_ctx_t *ctx, uint8_t c) {
   if (c <= 0x7F)
     return write_fixed_value(ctx, c);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
 bool cmp_write_nfix(cmp_ctx_t *ctx, int8_t c) {
-  if (c >= -32 && c <= -1)
+  if (c >= -0x20 && c <= -1)
     return write_fixed_value(ctx, (uint8_t)c);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
 bool cmp_write_sfix(cmp_ctx_t *ctx, int8_t c) {
   if (c >= 0)
     return cmp_write_pfix(ctx, (uint8_t)c);
-  if (c >= -32 && c <= -1)
+  if (c >= -0x20 && c <= -1)
     return cmp_write_nfix(ctx, c);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
@@ -83921,7 +85242,7 @@ bool cmp_write_s8(cmp_ctx_t *ctx, int8_t c) {
   if (!write_type_marker(ctx, S8_MARKER))
     return false;
 
-  return ctx->write(ctx, &c, sizeof(int8_t));
+  return ctx->write(ctx, &c, sizeof(int8_t)) == sizeof(int8_t);
 }
 
 bool cmp_write_s16(cmp_ctx_t *ctx, int16_t s) {
@@ -83930,7 +85251,7 @@ bool cmp_write_s16(cmp_ctx_t *ctx, int16_t s) {
 
   s = sbe16(s);
 
-  return ctx->write(ctx, &s, sizeof(int16_t));
+  return ctx->write(ctx, &s, sizeof(int16_t)) == sizeof(int16_t);
 }
 
 bool cmp_write_s32(cmp_ctx_t *ctx, int32_t i) {
@@ -83939,7 +85260,7 @@ bool cmp_write_s32(cmp_ctx_t *ctx, int32_t i) {
 
   i = sbe32(i);
 
-  return ctx->write(ctx, &i, sizeof(int32_t));
+  return ctx->write(ctx, &i, sizeof(int32_t)) == sizeof(int32_t);
 }
 
 bool cmp_write_s64(cmp_ctx_t *ctx, int64_t l) {
@@ -83948,19 +85269,19 @@ bool cmp_write_s64(cmp_ctx_t *ctx, int64_t l) {
 
   l = sbe64(l);
 
-  return ctx->write(ctx, &l, sizeof(int64_t));
+  return ctx->write(ctx, &l, sizeof(int64_t)) == sizeof(int64_t);
 }
 
 bool cmp_write_integer(cmp_ctx_t *ctx, int64_t d) {
   if (d >= 0)
     return cmp_write_uinteger(ctx, (uint64_t)d);
-  if (d >= -32)
+  if (d >= -0x20)
     return cmp_write_nfix(ctx, (int8_t)d);
-  if (d >= -128)
+  if (d >= -0x80)
     return cmp_write_s8(ctx, (int8_t)d);
-  if (d >= -32768)
+  if (d >= -0x8000)
     return cmp_write_s16(ctx, (int16_t)d);
-  if (d >= (-2147483647 - 1))
+  if (d >= -INT64_C(0x80000000))
     return cmp_write_s32(ctx, (int32_t)d);
 
   return cmp_write_s64(ctx, d);
@@ -83974,7 +85295,7 @@ bool cmp_write_u8(cmp_ctx_t *ctx, uint8_t c) {
   if (!write_type_marker(ctx, U8_MARKER))
     return false;
 
-  return ctx->write(ctx, &c, sizeof(uint8_t));
+  return ctx->write(ctx, &c, sizeof(uint8_t)) == sizeof(uint8_t);
 }
 
 bool cmp_write_u16(cmp_ctx_t *ctx, uint16_t s) {
@@ -83983,7 +85304,7 @@ bool cmp_write_u16(cmp_ctx_t *ctx, uint16_t s) {
 
   s = be16(s);
 
-  return ctx->write(ctx, &s, sizeof(uint16_t));
+  return ctx->write(ctx, &s, sizeof(uint16_t)) == sizeof(uint16_t);
 }
 
 bool cmp_write_u32(cmp_ctx_t *ctx, uint32_t i) {
@@ -83992,7 +85313,7 @@ bool cmp_write_u32(cmp_ctx_t *ctx, uint32_t i) {
 
   i = be32(i);
 
-  return ctx->write(ctx, &i, sizeof(uint32_t));
+  return ctx->write(ctx, &i, sizeof(uint32_t)) == sizeof(uint32_t);
 }
 
 bool cmp_write_u64(cmp_ctx_t *ctx, uint64_t l) {
@@ -84001,7 +85322,7 @@ bool cmp_write_u64(cmp_ctx_t *ctx, uint64_t l) {
 
   l = be64(l);
 
-  return ctx->write(ctx, &l, sizeof(uint64_t));
+  return ctx->write(ctx, &l, sizeof(uint64_t)) == sizeof(uint64_t);
 }
 
 bool cmp_write_uinteger(cmp_ctx_t *ctx, uint64_t u) {
@@ -84030,15 +85351,16 @@ bool cmp_write_float(cmp_ctx_t *ctx, float f) {
   if (!is_bigendian()) {
     char swapped[sizeof(float)];
     char *fbuf = (char *)&f;
+
     size_t i;
-
-    for (i = 0; i < sizeof(float); i++)
+    for (i = 0; i < sizeof(float); ++i) {
       swapped[i] = fbuf[sizeof(float) - i - 1];
+    }
 
-    return ctx->write(ctx, swapped, sizeof(float));
+    return ctx->write(ctx, swapped, sizeof(float)) == sizeof(float);
   }
 
-  return ctx->write(ctx, &f, sizeof(float));
+  return ctx->write(ctx, &f, sizeof(float)) == sizeof(float);
 }
 
 bool cmp_write_double(cmp_ctx_t *ctx, double d) {
@@ -84049,20 +85371,21 @@ bool cmp_write_double(cmp_ctx_t *ctx, double d) {
   if (!is_bigendian()) {
     char swapped[sizeof(double)];
     char *dbuf = (char *)&d;
+
     size_t i;
-
-    for (i = 0; i < sizeof(double); i++)
+    for (i = 0; i < sizeof(double); ++i) {
       swapped[i] = dbuf[sizeof(double) - i - 1];
+    }
 
-    return ctx->write(ctx, swapped, sizeof(double));
+    return ctx->write(ctx, swapped, sizeof(double)) == sizeof(double);
   }
 
-  return ctx->write(ctx, &d, sizeof(double));
+  return ctx->write(ctx, &d, sizeof(double)) == sizeof(double);
 }
 
 bool cmp_write_decimal(cmp_ctx_t *ctx, double d) {
-  float f = (float)d;
-  double df = (double)f;
+  const float f = (float)d;
+  const double df = (double)f;
 
   if (df == d)
     return cmp_write_float(ctx, f);
@@ -84091,17 +85414,14 @@ bool cmp_write_bool(cmp_ctx_t *ctx, bool b) {
 }
 
 bool cmp_write_u8_as_bool(cmp_ctx_t *ctx, uint8_t b) {
-  if (b)
-    return cmp_write_true(ctx);
-
-  return cmp_write_false(ctx);
+  return cmp_write_bool(ctx, b != 0);
 }
 
 bool cmp_write_fixstr_marker(cmp_ctx_t *ctx, uint8_t size) {
   if (size <= FIXSTR_SIZE)
     return write_fixed_value(ctx, FIXSTR_MARKER | size);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
@@ -84112,10 +85432,10 @@ bool cmp_write_fixstr(cmp_ctx_t *ctx, const char *data, uint8_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84123,10 +85443,10 @@ bool cmp_write_str8_marker(cmp_ctx_t *ctx, uint8_t size) {
   if (!write_type_marker(ctx, STR8_MARKER))
     return false;
 
-  if (ctx->write(ctx, &size, sizeof(uint8_t)))
+  if (ctx->write(ctx, &size, sizeof(uint8_t)) == sizeof(uint8_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84137,10 +85457,10 @@ bool cmp_write_str8(cmp_ctx_t *ctx, const char *data, uint8_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84150,10 +85470,10 @@ bool cmp_write_str16_marker(cmp_ctx_t *ctx, uint16_t size) {
 
   size = be16(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint16_t)))
+  if (ctx->write(ctx, &size, sizeof(uint16_t)) == sizeof(uint16_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84164,10 +85484,10 @@ bool cmp_write_str16(cmp_ctx_t *ctx, const char *data, uint16_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84177,10 +85497,10 @@ bool cmp_write_str32_marker(cmp_ctx_t *ctx, uint32_t size) {
 
   size = be32(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint32_t)))
+  if (ctx->write(ctx, &size, sizeof(uint32_t)) == sizeof(uint32_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84191,10 +85511,10 @@ bool cmp_write_str32(cmp_ctx_t *ctx, const char *data, uint32_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84242,10 +85562,10 @@ bool cmp_write_bin8_marker(cmp_ctx_t *ctx, uint8_t size) {
   if (!write_type_marker(ctx, BIN8_MARKER))
     return false;
 
-  if (ctx->write(ctx, &size, sizeof(uint8_t)))
+  if (ctx->write(ctx, &size, sizeof(uint8_t)) == sizeof(uint8_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84256,10 +85576,10 @@ bool cmp_write_bin8(cmp_ctx_t *ctx, const void *data, uint8_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84269,10 +85589,10 @@ bool cmp_write_bin16_marker(cmp_ctx_t *ctx, uint16_t size) {
 
   size = be16(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint16_t)))
+  if (ctx->write(ctx, &size, sizeof(uint16_t)) == sizeof(uint16_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84283,10 +85603,10 @@ bool cmp_write_bin16(cmp_ctx_t *ctx, const void *data, uint16_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84296,10 +85616,10 @@ bool cmp_write_bin32_marker(cmp_ctx_t *ctx, uint32_t size) {
 
   size = be32(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint32_t)))
+  if (ctx->write(ctx, &size, sizeof(uint32_t)) == sizeof(uint32_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84310,10 +85630,10 @@ bool cmp_write_bin32(cmp_ctx_t *ctx, const void *data, uint32_t size) {
   if (size == 0)
     return true;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84339,7 +85659,7 @@ bool cmp_write_fixarray(cmp_ctx_t *ctx, uint8_t size) {
   if (size <= FIXARRAY_SIZE)
     return write_fixed_value(ctx, FIXARRAY_MARKER | size);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
@@ -84349,10 +85669,10 @@ bool cmp_write_array16(cmp_ctx_t *ctx, uint16_t size) {
 
   size = be16(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint16_t)))
+  if (ctx->write(ctx, &size, sizeof(uint16_t)) == sizeof(uint16_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84362,10 +85682,10 @@ bool cmp_write_array32(cmp_ctx_t *ctx, uint32_t size) {
 
   size = be32(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint32_t)))
+  if (ctx->write(ctx, &size, sizeof(uint32_t)) == sizeof(uint32_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84382,7 +85702,7 @@ bool cmp_write_fixmap(cmp_ctx_t *ctx, uint8_t size) {
   if (size <= FIXMAP_SIZE)
     return write_fixed_value(ctx, FIXMAP_MARKER | size);
 
-  ctx->error = INPUT_VALUE_TOO_LARGE_ERROR;
+  ctx->error = CMP_ERROR_INPUT_VALUE_TOO_LARGE;
   return false;
 }
 
@@ -84392,10 +85712,10 @@ bool cmp_write_map16(cmp_ctx_t *ctx, uint16_t size) {
 
   size = be16(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint16_t)))
+  if (ctx->write(ctx, &size, sizeof(uint16_t)) == sizeof(uint16_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84405,10 +85725,10 @@ bool cmp_write_map32(cmp_ctx_t *ctx, uint32_t size) {
 
   size = be32(size);
 
-  if (ctx->write(ctx, &size, sizeof(uint32_t)))
+  if (ctx->write(ctx, &size, sizeof(uint32_t)) == sizeof(uint32_t))
     return true;
 
-  ctx->error = LENGTH_WRITING_ERROR;
+  ctx->error = CMP_ERROR_LENGTH_WRITING;
   return false;
 }
 
@@ -84425,10 +85745,10 @@ bool cmp_write_fixext1_marker(cmp_ctx_t *ctx, int8_t type) {
   if (!write_type_marker(ctx, FIXEXT1_MARKER))
     return false;
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84436,10 +85756,10 @@ bool cmp_write_fixext1(cmp_ctx_t *ctx, int8_t type, const void *data) {
   if (!cmp_write_fixext1_marker(ctx, type))
     return false;
 
-  if (ctx->write(ctx, data, 1))
+  if (ctx->write(ctx, data, 1) == 1)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84447,10 +85767,10 @@ bool cmp_write_fixext2_marker(cmp_ctx_t *ctx, int8_t type) {
   if (!write_type_marker(ctx, FIXEXT2_MARKER))
     return false;
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84458,10 +85778,10 @@ bool cmp_write_fixext2(cmp_ctx_t *ctx, int8_t type, const void *data) {
   if (!cmp_write_fixext2_marker(ctx, type))
     return false;
 
-  if (ctx->write(ctx, data, 2))
+  if (ctx->write(ctx, data, 2) == 2)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84469,10 +85789,10 @@ bool cmp_write_fixext4_marker(cmp_ctx_t *ctx, int8_t type) {
   if (!write_type_marker(ctx, FIXEXT4_MARKER))
     return false;
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84480,10 +85800,10 @@ bool cmp_write_fixext4(cmp_ctx_t *ctx, int8_t type, const void *data) {
   if (!cmp_write_fixext4_marker(ctx, type))
     return false;
 
-  if (ctx->write(ctx, data, 4))
+  if (ctx->write(ctx, data, 4) == 4)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84491,10 +85811,10 @@ bool cmp_write_fixext8_marker(cmp_ctx_t *ctx, int8_t type) {
   if (!write_type_marker(ctx, FIXEXT8_MARKER))
     return false;
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84502,10 +85822,10 @@ bool cmp_write_fixext8(cmp_ctx_t *ctx, int8_t type, const void *data) {
   if (!cmp_write_fixext8_marker(ctx, type))
     return false;
 
-  if (ctx->write(ctx, data, 8))
+  if (ctx->write(ctx, data, 8) == 8)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84513,10 +85833,10 @@ bool cmp_write_fixext16_marker(cmp_ctx_t *ctx, int8_t type) {
   if (!write_type_marker(ctx, FIXEXT16_MARKER))
     return false;
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84524,10 +85844,10 @@ bool cmp_write_fixext16(cmp_ctx_t *ctx, int8_t type, const void *data) {
   if (!cmp_write_fixext16_marker(ctx, type))
     return false;
 
-  if (ctx->write(ctx, data, 16))
+  if (ctx->write(ctx, data, 16) == 16)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84535,15 +85855,15 @@ bool cmp_write_ext8_marker(cmp_ctx_t *ctx, int8_t type, uint8_t size) {
   if (!write_type_marker(ctx, EXT8_MARKER))
     return false;
 
-  if (!ctx->write(ctx, &size, sizeof(uint8_t))) {
-    ctx->error = LENGTH_WRITING_ERROR;
+  if (ctx->write(ctx, &size, sizeof(uint8_t)) != sizeof(uint8_t)) {
+    ctx->error = CMP_ERROR_LENGTH_WRITING;
     return false;
   }
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84551,10 +85871,10 @@ bool cmp_write_ext8(cmp_ctx_t *ctx, int8_t type, uint8_t size, const void *data)
   if (!cmp_write_ext8_marker(ctx, type, size))
     return false;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84564,15 +85884,15 @@ bool cmp_write_ext16_marker(cmp_ctx_t *ctx, int8_t type, uint16_t size) {
 
   size = be16(size);
 
-  if (!ctx->write(ctx, &size, sizeof(uint16_t))) {
-    ctx->error = LENGTH_WRITING_ERROR;
+  if (ctx->write(ctx, &size, sizeof(uint16_t)) != sizeof(uint16_t)) {
+    ctx->error = CMP_ERROR_LENGTH_WRITING;
     return false;
   }
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84580,10 +85900,10 @@ bool cmp_write_ext16(cmp_ctx_t *ctx, int8_t type, uint16_t size, const void *dat
   if (!cmp_write_ext16_marker(ctx, type, size))
     return false;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84593,15 +85913,15 @@ bool cmp_write_ext32_marker(cmp_ctx_t *ctx, int8_t type, uint32_t size) {
 
   size = be32(size);
 
-  if (!ctx->write(ctx, &size, sizeof(uint32_t))) {
-    ctx->error = LENGTH_WRITING_ERROR;
+  if (ctx->write(ctx, &size, sizeof(uint32_t)) != sizeof(uint32_t)) {
+    ctx->error = CMP_ERROR_LENGTH_WRITING;
     return false;
   }
 
-  if (ctx->write(ctx, &type, sizeof(int8_t)))
+  if (ctx->write(ctx, &type, sizeof(int8_t)) == sizeof(int8_t))
     return true;
 
-  ctx->error = EXT_TYPE_WRITING_ERROR;
+  ctx->error = CMP_ERROR_EXT_TYPE_WRITING;
   return false;
 }
 
@@ -84609,10 +85929,10 @@ bool cmp_write_ext32(cmp_ctx_t *ctx, int8_t type, uint32_t size, const void *dat
   if (!cmp_write_ext32_marker(ctx, type, size))
     return false;
 
-  if (ctx->write(ctx, data, size))
+  if (ctx->write(ctx, data, size) == size)
     return true;
 
-  ctx->error = DATA_WRITING_ERROR;
+  ctx->error = CMP_ERROR_DATA_WRITING;
   return false;
 }
 
@@ -84666,10 +85986,11 @@ bool cmp_write_object(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       return cmp_write_fixstr_marker(ctx, (uint8_t)obj->as.str_size);
     case CMP_TYPE_NIL:
       return cmp_write_nil(ctx);
-    case CMP_TYPE_BOOLEAN:
+    case CMP_TYPE_BOOLEAN: {
       if (obj->as.boolean)
         return cmp_write_true(ctx);
       return cmp_write_false(ctx);
+    }
     case CMP_TYPE_BIN8:
       return cmp_write_bin8_marker(ctx, (uint8_t)obj->as.bin_size);
     case CMP_TYPE_BIN16:
@@ -84686,20 +86007,22 @@ bool cmp_write_object(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       );
     case CMP_TYPE_EXT32:
       return cmp_write_ext32_marker(ctx, obj->as.ext.type, obj->as.ext.size);
-    case CMP_TYPE_FLOAT:
+    case CMP_TYPE_FLOAT: {
 #ifndef CMP_NO_FLOAT
       return cmp_write_float(ctx, obj->as.flt);
 #else /* CMP_NO_FLOAT */
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
 #endif /* CMP_NO_FLOAT */
-    case CMP_TYPE_DOUBLE:
+    }
+    case CMP_TYPE_DOUBLE: {
 #ifndef CMP_NO_FLOAT
       return cmp_write_double(ctx, obj->as.dbl);
 #else /* CMP_NO_FLOAT */
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
-#endif
+#endif /* CMP_NO_FLOAT */
+    }
     case CMP_TYPE_UINT8:
       return cmp_write_u8(ctx, obj->as.u8);
     case CMP_TYPE_UINT16:
@@ -84742,9 +86065,10 @@ bool cmp_write_object(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       return cmp_write_map32(ctx, obj->as.map_size);
     case CMP_TYPE_NEGATIVE_FIXNUM:
       return cmp_write_nfix(ctx, obj->as.s8);
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -84760,10 +86084,11 @@ bool cmp_write_object_v4(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       return cmp_write_fixstr_marker(ctx, (uint8_t)obj->as.str_size);
     case CMP_TYPE_NIL:
       return cmp_write_nil(ctx);
-    case CMP_TYPE_BOOLEAN:
+    case CMP_TYPE_BOOLEAN: {
       if (obj->as.boolean)
         return cmp_write_true(ctx);
       return cmp_write_false(ctx);
+    }
     case CMP_TYPE_EXT8:
       return cmp_write_ext8_marker(ctx, obj->as.ext.type, (uint8_t)obj->as.ext.size);
     case CMP_TYPE_EXT16:
@@ -84772,20 +86097,22 @@ bool cmp_write_object_v4(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       );
     case CMP_TYPE_EXT32:
       return cmp_write_ext32_marker(ctx, obj->as.ext.type, obj->as.ext.size);
-    case CMP_TYPE_FLOAT:
+    case CMP_TYPE_FLOAT: {
 #ifndef CMP_NO_FLOAT
       return cmp_write_float(ctx, obj->as.flt);
 #else /* CMP_NO_FLOAT */
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
-#endif
-    case CMP_TYPE_DOUBLE:
+#endif /* CMP_NO_FLOAT */
+    }
+    case CMP_TYPE_DOUBLE: {
 #ifndef CMP_NO_FLOAT
       return cmp_write_double(ctx, obj->as.dbl);
 #else
-      ctx->error = DISABLED_FLOATING_POINT_ERROR;
+      ctx->error = CMP_ERROR_DISABLED_FLOATING_POINT;
       return false;
-#endif
+#endif /* CMP_NO_FLOAT */
+    }
     case CMP_TYPE_UINT8:
       return cmp_write_u8(ctx, obj->as.u8);
     case CMP_TYPE_UINT16:
@@ -84826,9 +86153,10 @@ bool cmp_write_object_v4(cmp_ctx_t *ctx, const cmp_object_t *obj) {
       return cmp_write_map32(ctx, obj->as.map_size);
     case CMP_TYPE_NEGATIVE_FIXNUM:
       return cmp_write_nfix(ctx, obj->as.s8);
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -84839,7 +86167,7 @@ bool cmp_read_pfix(cmp_ctx_t *ctx, uint8_t *c) {
     return false;
 
   if (obj.type != CMP_TYPE_POSITIVE_FIXNUM) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84854,7 +86182,7 @@ bool cmp_read_nfix(cmp_ctx_t *ctx, int8_t *c) {
     return false;
 
   if (obj.type != CMP_TYPE_NEGATIVE_FIXNUM) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84870,12 +86198,14 @@ bool cmp_read_sfix(cmp_ctx_t *ctx, int8_t *c) {
 
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_NEGATIVE_FIXNUM:
+    case CMP_TYPE_NEGATIVE_FIXNUM: {
       *c = obj.as.s8;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -84886,7 +86216,7 @@ bool cmp_read_s8(cmp_ctx_t *ctx, int8_t *c) {
     return false;
 
   if (obj.type != CMP_TYPE_SINT8) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84901,7 +86231,7 @@ bool cmp_read_s16(cmp_ctx_t *ctx, int16_t *s) {
     return false;
 
   if (obj.type != CMP_TYPE_SINT16) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84916,7 +86246,7 @@ bool cmp_read_s32(cmp_ctx_t *ctx, int32_t *i) {
     return false;
 
   if (obj.type != CMP_TYPE_SINT32) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84931,7 +86261,7 @@ bool cmp_read_s64(cmp_ctx_t *ctx, int64_t *l) {
     return false;
 
   if (obj.type != CMP_TYPE_SINT64) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -84948,20 +86278,22 @@ bool cmp_read_char(cmp_ctx_t *ctx, int8_t *c) {
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *c = obj.as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       if (obj.as.u8 <= 127) {
         *c = (int8_t)obj.as.u8;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -84974,26 +86306,30 @@ bool cmp_read_short(cmp_ctx_t *ctx, int16_t *s) {
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *s = obj.as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *s = obj.as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *s = obj.as.s16;
       return true;
-    case CMP_TYPE_UINT16:
-      if (obj.as.u16 <= 32767) {
+    }
+    case CMP_TYPE_UINT16: {
+      if (obj.as.u16 <= 0x7fff) {
         *s = (int16_t)obj.as.u16;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85006,32 +86342,38 @@ bool cmp_read_int(cmp_ctx_t *ctx, int32_t *i) {
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *i = obj.as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *i = obj.as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *i = obj.as.s16;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *i = obj.as.u16;
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       *i = obj.as.s32;
       return true;
-    case CMP_TYPE_UINT32:
-      if (obj.as.u32 <= 2147483647) {
+    }
+    case CMP_TYPE_UINT32: {
+      if (obj.as.u32 <= 0x7fffffff) {
         *i = (int32_t)obj.as.u32;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85044,38 +86386,46 @@ bool cmp_read_long(cmp_ctx_t *ctx, int64_t *d) {
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *d = obj.as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *d = obj.as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *d = obj.as.s16;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *d = obj.as.u16;
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       *d = obj.as.s32;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *d = obj.as.u32;
       return true;
-    case CMP_TYPE_SINT64:
+    }
+    case CMP_TYPE_SINT64: {
       *d = obj.as.s64;
       return true;
-    case CMP_TYPE_UINT64:
-      if (obj.as.u64 <= 9223372036854775807) {
+    }
+    case CMP_TYPE_UINT64: {
+      if (obj.as.u64 <= UINT64_C(0x7fffffffffffffff)) {
         *d = (int64_t)obj.as.u64;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85094,7 +86444,7 @@ bool cmp_read_u8(cmp_ctx_t *ctx, uint8_t *c) {
     return false;
 
   if (obj.type != CMP_TYPE_UINT8) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85109,7 +86459,7 @@ bool cmp_read_u16(cmp_ctx_t *ctx, uint16_t *s) {
     return false;
 
   if (obj.type != CMP_TYPE_UINT16) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85124,7 +86474,7 @@ bool cmp_read_u32(cmp_ctx_t *ctx, uint32_t *i) {
     return false;
 
   if (obj.type != CMP_TYPE_UINT32) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85139,7 +86489,7 @@ bool cmp_read_u64(cmp_ctx_t *ctx, uint64_t *l) {
     return false;
 
   if (obj.type != CMP_TYPE_UINT64) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85155,21 +86505,23 @@ bool cmp_read_uchar(cmp_ctx_t *ctx, uint8_t *c) {
 
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *c = obj.as.u8;
       return true;
+    }
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       if (obj.as.s8 >= 0) {
         *c = (uint8_t)obj.as.s8;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85181,30 +86533,34 @@ bool cmp_read_ushort(cmp_ctx_t *ctx, uint16_t *s) {
 
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *s = obj.as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *s = obj.as.u16;
       return true;
+    }
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       if (obj.as.s8 >= 0) {
         *s = (uint8_t)obj.as.s8;
         return true;
       }
       break;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       if (obj.as.s16 >= 0) {
         *s = (uint16_t)obj.as.s16;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85216,39 +86572,45 @@ bool cmp_read_uint(cmp_ctx_t *ctx, uint32_t *i) {
 
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *i = obj.as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *i = obj.as.u16;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *i = obj.as.u32;
       return true;
+    }
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       if (obj.as.s8 >= 0) {
         *i = (uint8_t)obj.as.s8;
         return true;
       }
       break;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       if (obj.as.s16 >= 0) {
         *i = (uint16_t)obj.as.s16;
         return true;
       }
       break;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       if (obj.as.s32 >= 0) {
         *i = (uint32_t)obj.as.s32;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85260,48 +86622,56 @@ bool cmp_read_ulong(cmp_ctx_t *ctx, uint64_t *u) {
 
   switch (obj.type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *u = obj.as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *u = obj.as.u16;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *u = obj.as.u32;
       return true;
-    case CMP_TYPE_UINT64:
+    }
+    case CMP_TYPE_UINT64: {
       *u = obj.as.u64;
       return true;
+    }
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       if (obj.as.s8 >= 0) {
         *u = (uint8_t)obj.as.s8;
         return true;
       }
       break;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       if (obj.as.s16 >= 0) {
         *u = (uint16_t)obj.as.s16;
         return true;
       }
       break;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       if (obj.as.s32 >= 0) {
         *u = (uint32_t)obj.as.s32;
         return true;
       }
       break;
-    case CMP_TYPE_SINT64:
+    }
+    case CMP_TYPE_SINT64: {
       if (obj.as.s64 >= 0) {
         *u = (uint64_t)obj.as.s64;
         return true;
       }
       break;
+    }
     default:
       break;
   }
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85317,7 +86687,7 @@ bool cmp_read_float(cmp_ctx_t *ctx, float *f) {
     return false;
 
   if (obj.type != CMP_TYPE_FLOAT) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85333,7 +86703,7 @@ bool cmp_read_double(cmp_ctx_t *ctx, double *d) {
     return false;
 
   if (obj.type != CMP_TYPE_DOUBLE) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85349,15 +86719,18 @@ bool cmp_read_decimal(cmp_ctx_t *ctx, double *d) {
     return false;
 
   switch (obj.type) {
-    case CMP_TYPE_FLOAT:
+    case CMP_TYPE_FLOAT: {
       *d = (double)obj.as.flt;
       return true;
-    case CMP_TYPE_DOUBLE:
+    }
+    case CMP_TYPE_DOUBLE: {
       *d = obj.as.dbl;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 #endif /* CMP_NO_FLOAT */
@@ -85371,7 +86744,7 @@ bool cmp_read_nil(cmp_ctx_t *ctx) {
   if (obj.type == CMP_TYPE_NIL)
     return true;
 
-  ctx->error = INVALID_TYPE_ERROR;
+  ctx->error = CMP_ERROR_INVALID_TYPE;
   return false;
 }
 
@@ -85382,14 +86755,15 @@ bool cmp_read_bool(cmp_ctx_t *ctx, bool *b) {
     return false;
 
   if (obj.type != CMP_TYPE_BOOLEAN) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
-  if (obj.as.boolean)
+  if (obj.as.boolean) {
     *b = true;
-  else
+  } else {
     *b = false;
+  }
 
   return true;
 }
@@ -85401,14 +86775,15 @@ bool cmp_read_bool_as_u8(cmp_ctx_t *ctx, uint8_t *b) {
     return false;
 
   if (obj.type != CMP_TYPE_BOOLEAN) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
-  if (obj.as.boolean)
+  if (obj.as.boolean) {
     *b = 1;
-  else
+  } else {
     *b = 0;
+  }
 
   return true;
 }
@@ -85423,12 +86798,14 @@ bool cmp_read_str_size(cmp_ctx_t *ctx, uint32_t *size) {
     case CMP_TYPE_FIXSTR:
     case CMP_TYPE_STR8:
     case CMP_TYPE_STR16:
-    case CMP_TYPE_STR32:
+    case CMP_TYPE_STR32: {
       *size = obj.as.str_size;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -85440,12 +86817,12 @@ bool cmp_read_str(cmp_ctx_t *ctx, char *data, uint32_t *size) {
 
   if (str_size >= *size) {
     *size = str_size;
-    ctx->error = STR_DATA_LENGTH_TOO_LONG_ERROR;
+    ctx->error = CMP_ERROR_STR_DATA_LENGTH_TOO_LONG;
     return false;
   }
 
   if (!ctx->read(ctx, data, str_size)) {
-    ctx->error = DATA_READING_ERROR;
+    ctx->error = CMP_ERROR_DATA_READING;
     return false;
   }
 
@@ -85464,12 +86841,14 @@ bool cmp_read_bin_size(cmp_ctx_t *ctx, uint32_t *size) {
   switch (obj.type) {
     case CMP_TYPE_BIN8:
     case CMP_TYPE_BIN16:
-    case CMP_TYPE_BIN32:
+    case CMP_TYPE_BIN32: {
       *size = obj.as.bin_size;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -85480,12 +86859,12 @@ bool cmp_read_bin(cmp_ctx_t *ctx, void *data, uint32_t *size) {
     return false;
 
   if (bin_size > *size) {
-    ctx->error = BIN_DATA_LENGTH_TOO_LONG_ERROR;
+    ctx->error = CMP_ERROR_BIN_DATA_LENGTH_TOO_LONG;
     return false;
   }
 
   if (!ctx->read(ctx, data, bin_size)) {
-    ctx->error = DATA_READING_ERROR;
+    ctx->error = CMP_ERROR_DATA_READING;
     return false;
   }
 
@@ -85502,12 +86881,14 @@ bool cmp_read_array(cmp_ctx_t *ctx, uint32_t *size) {
   switch (obj.type) {
     case CMP_TYPE_FIXARRAY:
     case CMP_TYPE_ARRAY16:
-    case CMP_TYPE_ARRAY32:
+    case CMP_TYPE_ARRAY32: {
       *size = obj.as.array_size;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -85520,12 +86901,14 @@ bool cmp_read_map(cmp_ctx_t *ctx, uint32_t *size) {
   switch (obj.type) {
     case CMP_TYPE_FIXMAP:
     case CMP_TYPE_MAP16:
-    case CMP_TYPE_MAP32:
+    case CMP_TYPE_MAP32: {
       *size = obj.as.map_size;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -85536,7 +86919,7 @@ bool cmp_read_fixext1_marker(cmp_ctx_t *ctx, int8_t *type) {
     return false;
 
   if (obj.type != CMP_TYPE_FIXEXT1) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85551,7 +86934,7 @@ bool cmp_read_fixext1(cmp_ctx_t *ctx, int8_t *type, void *data) {
   if (ctx->read(ctx, data, 1))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85562,7 +86945,7 @@ bool cmp_read_fixext2_marker(cmp_ctx_t *ctx, int8_t *type) {
     return false;
 
   if (obj.type != CMP_TYPE_FIXEXT2) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85577,7 +86960,7 @@ bool cmp_read_fixext2(cmp_ctx_t *ctx, int8_t *type, void *data) {
   if (ctx->read(ctx, data, 2))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85588,7 +86971,7 @@ bool cmp_read_fixext4_marker(cmp_ctx_t *ctx, int8_t *type) {
     return false;
 
   if (obj.type != CMP_TYPE_FIXEXT4) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85603,7 +86986,7 @@ bool cmp_read_fixext4(cmp_ctx_t *ctx, int8_t *type, void *data) {
   if (ctx->read(ctx, data, 4))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85614,7 +86997,7 @@ bool cmp_read_fixext8_marker(cmp_ctx_t *ctx, int8_t *type) {
     return false;
 
   if (obj.type != CMP_TYPE_FIXEXT8) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85629,7 +87012,7 @@ bool cmp_read_fixext8(cmp_ctx_t *ctx, int8_t *type, void *data) {
   if (ctx->read(ctx, data, 8))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85640,7 +87023,7 @@ bool cmp_read_fixext16_marker(cmp_ctx_t *ctx, int8_t *type) {
     return false;
 
   if (obj.type != CMP_TYPE_FIXEXT16) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85655,7 +87038,7 @@ bool cmp_read_fixext16(cmp_ctx_t *ctx, int8_t *type, void *data) {
   if (ctx->read(ctx, data, 16))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85666,7 +87049,7 @@ bool cmp_read_ext8_marker(cmp_ctx_t *ctx, int8_t *type, uint8_t *size) {
     return false;
 
   if (obj.type != CMP_TYPE_EXT8) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85683,7 +87066,7 @@ bool cmp_read_ext8(cmp_ctx_t *ctx, int8_t *type, uint8_t *size, void *data) {
   if (ctx->read(ctx, data, *size))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85694,7 +87077,7 @@ bool cmp_read_ext16_marker(cmp_ctx_t *ctx, int8_t *type, uint16_t *size) {
     return false;
 
   if (obj.type != CMP_TYPE_EXT16) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85711,7 +87094,7 @@ bool cmp_read_ext16(cmp_ctx_t *ctx, int8_t *type, uint16_t *size, void *data) {
   if (ctx->read(ctx, data, *size))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85722,7 +87105,7 @@ bool cmp_read_ext32_marker(cmp_ctx_t *ctx, int8_t *type, uint32_t *size) {
     return false;
 
   if (obj.type != CMP_TYPE_EXT32) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85739,7 +87122,7 @@ bool cmp_read_ext32(cmp_ctx_t *ctx, int8_t *type, uint32_t *size, void *data) {
   if (ctx->read(ctx, data, *size))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85757,13 +87140,15 @@ bool cmp_read_ext_marker(cmp_ctx_t *ctx, int8_t *type, uint32_t *size) {
     case CMP_TYPE_FIXEXT16:
     case CMP_TYPE_EXT8:
     case CMP_TYPE_EXT16:
-    case CMP_TYPE_EXT32:
+    case CMP_TYPE_EXT32: {
       *type = obj.as.ext.type;
       *size = obj.as.ext.size;
       return true;
-    default:
-      ctx->error = INVALID_TYPE_ERROR;
+    }
+    default: {
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
+    }
   }
 }
 
@@ -85774,7 +87159,7 @@ bool cmp_read_ext(cmp_ctx_t *ctx, int8_t *type, uint32_t *size, void *data) {
   if (ctx->read(ctx, data, *size))
     return true;
 
-  ctx->error = DATA_READING_ERROR;
+  ctx->error = CMP_ERROR_DATA_READING;
   return false;
 }
 
@@ -85785,7 +87170,7 @@ bool cmp_read_object(cmp_ctx_t *ctx, cmp_object_t *obj) {
     return false;
 
   if (!type_marker_to_cmp_type(type_marker, &obj->type)) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85802,7 +87187,7 @@ bool cmp_skip_object(cmp_ctx_t *ctx, cmp_object_t *obj) {
   }
 
   if (!type_marker_to_cmp_type(type_marker, &cmp_type)) {
-    ctx->error = INVALID_TYPE_ERROR;
+    ctx->error = CMP_ERROR_INVALID_TYPE;
     return false;
   }
 
@@ -85812,22 +87197,23 @@ bool cmp_skip_object(cmp_ctx_t *ctx, cmp_object_t *obj) {
     case CMP_TYPE_ARRAY32:
     case CMP_TYPE_FIXMAP:
     case CMP_TYPE_MAP16:
-    case CMP_TYPE_MAP32:
+    case CMP_TYPE_MAP32: {
       obj->type = cmp_type;
 
       if (!read_obj_data(ctx, type_marker, obj)) {
         return false;
       }
 
-      ctx->error = SKIP_DEPTH_LIMIT_EXCEEDED_ERROR;
+      ctx->error = CMP_ERROR_SKIP_DEPTH_LIMIT_EXCEEDED;
 
       return false;
-    default:
+    }
+    default: {
       if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
         return false;
       }
 
-      if (size) {
+      if (size != 0) {
         switch (cmp_type) {
           case CMP_TYPE_FIXEXT1:
           case CMP_TYPE_FIXEXT2:
@@ -85836,15 +87222,17 @@ bool cmp_skip_object(cmp_ctx_t *ctx, cmp_object_t *obj) {
           case CMP_TYPE_FIXEXT16:
           case CMP_TYPE_EXT8:
           case CMP_TYPE_EXT16:
-          case CMP_TYPE_EXT32:
-            size++;
+          case CMP_TYPE_EXT32: {
+            ++size;
             break;
+          }
           default:
             break;
         }
 
         skip_bytes(ctx, size);
       }
+    }
   }
 
   return true;
@@ -85854,7 +87242,7 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
   size_t element_count = 1;
   bool in_container = false;
 
-  while (element_count) {
+  while (element_count != 0) {
     uint8_t type_marker = 0;
     uint8_t cmp_type;
     uint32_t size = 0;
@@ -85864,7 +87252,7 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
     }
 
     if (!type_marker_to_cmp_type(type_marker, &cmp_type)) {
-      ctx->error = INVALID_TYPE_ERROR;
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
     }
 
@@ -85874,7 +87262,7 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
       case CMP_TYPE_ARRAY32:
       case CMP_TYPE_FIXMAP:
       case CMP_TYPE_MAP16:
-      case CMP_TYPE_MAP32:
+      case CMP_TYPE_MAP32: {
         if (in_container) {
           obj->type = cmp_type;
 
@@ -85882,19 +87270,20 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
             return false;
           }
 
-          ctx->error = SKIP_DEPTH_LIMIT_EXCEEDED_ERROR;
+          ctx->error = CMP_ERROR_SKIP_DEPTH_LIMIT_EXCEEDED;
           return false;
         }
 
         in_container = true;
 
         break;
-      default:
+      }
+      default: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
 
-        if (size) {
+        if (size != 0) {
           switch (cmp_type) {
             case CMP_TYPE_FIXEXT1:
             case CMP_TYPE_FIXEXT2:
@@ -85903,36 +87292,40 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
             case CMP_TYPE_FIXEXT16:
             case CMP_TYPE_EXT8:
             case CMP_TYPE_EXT16:
-            case CMP_TYPE_EXT32:
-              size++;
+            case CMP_TYPE_EXT32: {
+              ++size;
               break;
+            }
             default:
               break;
           }
 
           skip_bytes(ctx, size);
         }
+      }
     }
 
-    element_count--;
+    --element_count;
 
     switch (cmp_type) {
       case CMP_TYPE_FIXARRAY:
       case CMP_TYPE_ARRAY16:
-      case CMP_TYPE_ARRAY32:
+      case CMP_TYPE_ARRAY32: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
         element_count += size;
         break;
+      }
       case CMP_TYPE_FIXMAP:
       case CMP_TYPE_MAP16:
-      case CMP_TYPE_MAP32:
+      case CMP_TYPE_MAP32: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
         element_count += ((size_t)size) * 2;
         break;
+      }
       default:
         break;
     }
@@ -85944,7 +87337,7 @@ bool cmp_skip_object_flat(cmp_ctx_t *ctx, cmp_object_t *obj) {
 bool cmp_skip_object_no_limit(cmp_ctx_t *ctx) {
   size_t element_count = 1;
 
-  while (element_count) {
+  while (element_count != 0) {
     uint8_t type_marker = 0;
     uint8_t cmp_type = 0;
     uint32_t size = 0;
@@ -85954,7 +87347,7 @@ bool cmp_skip_object_no_limit(cmp_ctx_t *ctx) {
     }
 
     if (!type_marker_to_cmp_type(type_marker, &cmp_type)) {
-      ctx->error = INVALID_TYPE_ERROR;
+      ctx->error = CMP_ERROR_INVALID_TYPE;
       return false;
     }
 
@@ -85966,12 +87359,12 @@ bool cmp_skip_object_no_limit(cmp_ctx_t *ctx) {
       case CMP_TYPE_MAP16:
       case CMP_TYPE_MAP32:
         break;
-      default:
+      default: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
 
-        if (size) {
+        if (size != 0) {
           switch (cmp_type) {
             case CMP_TYPE_FIXEXT1:
             case CMP_TYPE_FIXEXT2:
@@ -85980,128 +87373,40 @@ bool cmp_skip_object_no_limit(cmp_ctx_t *ctx) {
             case CMP_TYPE_FIXEXT16:
             case CMP_TYPE_EXT8:
             case CMP_TYPE_EXT16:
-            case CMP_TYPE_EXT32:
-              size++;
+            case CMP_TYPE_EXT32: {
+              ++size;
               break;
+            }
             default:
               break;
           }
 
           skip_bytes(ctx, size);
         }
+      }
     }
 
-    element_count--;
+    --element_count;
 
     switch (cmp_type) {
       case CMP_TYPE_FIXARRAY:
       case CMP_TYPE_ARRAY16:
-      case CMP_TYPE_ARRAY32:
+      case CMP_TYPE_ARRAY32: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
         element_count += size;
         break;
+      }
       case CMP_TYPE_FIXMAP:
       case CMP_TYPE_MAP16:
-      case CMP_TYPE_MAP32:
+      case CMP_TYPE_MAP32: {
         if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
           return false;
         }
         element_count += ((size_t)size) * 2;
         break;
-      default:
-        break;
-    }
-  }
-
-  return true;
-}
-
-bool cmp_skip_object_limit(cmp_ctx_t *ctx, cmp_object_t *obj, uint32_t limit) {
-  size_t element_count = 1;
-  uint32_t depth = 0;
-
-  while (element_count) {
-    uint8_t type_marker = 0;
-    uint8_t cmp_type;
-    uint32_t size = 0;
-
-    if (!read_type_marker(ctx, &type_marker)) {
-      return false;
-    }
-
-    if (!type_marker_to_cmp_type(type_marker, &cmp_type)) {
-      ctx->error = INVALID_TYPE_ERROR;
-      return false;
-    }
-
-    switch (cmp_type) {
-      case CMP_TYPE_FIXARRAY:
-      case CMP_TYPE_ARRAY16:
-      case CMP_TYPE_ARRAY32:
-      case CMP_TYPE_FIXMAP:
-      case CMP_TYPE_MAP16:
-      case CMP_TYPE_MAP32:
-        depth++;
-
-        if (depth > limit) {
-          obj->type = cmp_type;
-
-          if (!read_obj_data(ctx, type_marker, obj)) {
-            return false;
-          }
-
-          ctx->error = SKIP_DEPTH_LIMIT_EXCEEDED_ERROR;
-
-          return false;
-        }
-
-        break;
-      default:
-        if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
-          return false;
-        }
-
-        if (size) {
-          switch (cmp_type) {
-            case CMP_TYPE_FIXEXT1:
-            case CMP_TYPE_FIXEXT2:
-            case CMP_TYPE_FIXEXT4:
-            case CMP_TYPE_FIXEXT8:
-            case CMP_TYPE_FIXEXT16:
-            case CMP_TYPE_EXT8:
-            case CMP_TYPE_EXT16:
-            case CMP_TYPE_EXT32:
-              size++;
-              break;
-            default:
-              break;
-          }
-
-          skip_bytes(ctx, size);
-        }
-    }
-
-    element_count--;
-
-    switch (cmp_type) {
-      case CMP_TYPE_FIXARRAY:
-      case CMP_TYPE_ARRAY16:
-      case CMP_TYPE_ARRAY32:
-        if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
-          return false;
-        }
-        element_count += size;
-        break;
-      case CMP_TYPE_FIXMAP:
-      case CMP_TYPE_MAP16:
-      case CMP_TYPE_MAP32:
-        if (!read_type_size(ctx, type_marker, cmp_type, &size)) {
-          return false;
-        }
-        element_count += ((size_t)size) * 2;
-        break;
+      }
       default:
         break;
     }
@@ -86304,10 +87609,11 @@ bool cmp_object_as_char(const cmp_object_t *obj, int8_t *c) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *c = obj->as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       if (obj->as.u8 <= 127) {
         *c = obj->as.s8;
         return true;
@@ -86315,8 +87621,9 @@ bool cmp_object_as_char(const cmp_object_t *obj, int8_t *c) {
       else {
         return false;
       }
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86324,25 +87631,29 @@ bool cmp_object_as_short(const cmp_object_t *obj, int16_t *s) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *s = obj->as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *s = obj->as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *s = obj->as.s16;
       return true;
-    case CMP_TYPE_UINT16:
-      if (obj->as.u16 <= 32767) {
+    }
+    case CMP_TYPE_UINT16: {
+      if (obj->as.u16 <= 0x7fff) {
         *s = (int16_t)obj->as.u16;
         return true;
       }
       else {
         return false;
       }
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86350,31 +87661,37 @@ bool cmp_object_as_int(const cmp_object_t *obj, int32_t *i) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *i = obj->as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *i = obj->as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *i = obj->as.s16;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *i = obj->as.u16;
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       *i = obj->as.s32;
       return true;
-    case CMP_TYPE_UINT32:
-      if (obj->as.u32 <= 2147483647) {
+    }
+    case CMP_TYPE_UINT32: {
+      if (obj->as.u32 <= 0x7fffffff) {
         *i = (int32_t)obj->as.u32;
         return true;
       }
       else {
         return false;
       }
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86382,37 +87699,45 @@ bool cmp_object_as_long(const cmp_object_t *obj, int64_t *d) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
     case CMP_TYPE_NEGATIVE_FIXNUM:
-    case CMP_TYPE_SINT8:
+    case CMP_TYPE_SINT8: {
       *d = obj->as.s8;
       return true;
-    case CMP_TYPE_UINT8:
+    }
+    case CMP_TYPE_UINT8: {
       *d = obj->as.u8;
       return true;
-    case CMP_TYPE_SINT16:
+    }
+    case CMP_TYPE_SINT16: {
       *d = obj->as.s16;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *d = obj->as.u16;
       return true;
-    case CMP_TYPE_SINT32:
+    }
+    case CMP_TYPE_SINT32: {
       *d = obj->as.s32;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *d = obj->as.u32;
       return true;
-    case CMP_TYPE_SINT64:
+    }
+    case CMP_TYPE_SINT64: {
       *d = obj->as.s64;
       return true;
-    case CMP_TYPE_UINT64:
-      if (obj->as.u64 <= 9223372036854775807) {
+    }
+    case CMP_TYPE_UINT64: {
+      if (obj->as.u64 <= UINT64_C(0x7fffffffffffffff)) {
         *d = (int64_t)obj->as.u64;
         return true;
       }
       else {
         return false;
       }
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86423,62 +87748,72 @@ bool cmp_object_as_sinteger(const cmp_object_t *obj, int64_t *d) {
 bool cmp_object_as_uchar(const cmp_object_t *obj, uint8_t *c) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *c = obj->as.u8;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
 bool cmp_object_as_ushort(const cmp_object_t *obj, uint16_t *s) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *s = obj->as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *s = obj->as.u16;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
 bool cmp_object_as_uint(const cmp_object_t *obj, uint32_t *i) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *i = obj->as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *i = obj->as.u16;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *i = obj->as.u32;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
 bool cmp_object_as_ulong(const cmp_object_t *obj, uint64_t *u) {
   switch (obj->type) {
     case CMP_TYPE_POSITIVE_FIXNUM:
-    case CMP_TYPE_UINT8:
+    case CMP_TYPE_UINT8: {
       *u = obj->as.u8;
       return true;
-    case CMP_TYPE_UINT16:
+    }
+    case CMP_TYPE_UINT16: {
       *u = obj->as.u16;
       return true;
-    case CMP_TYPE_UINT32:
+    }
+    case CMP_TYPE_UINT32: {
       *u = obj->as.u32;
       return true;
-    case CMP_TYPE_UINT64:
+    }
+    case CMP_TYPE_UINT64: {
       *u = obj->as.u64;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86508,10 +87843,11 @@ bool cmp_object_as_double(const cmp_object_t *obj, double *d) {
 
 bool cmp_object_as_bool(const cmp_object_t *obj, bool *b) {
   if (obj->type == CMP_TYPE_BOOLEAN) {
-    if (obj->as.boolean)
+    if (obj->as.boolean) {
       *b = true;
-    else
+    } else {
       *b = false;
+    }
 
     return true;
   }
@@ -86524,11 +87860,12 @@ bool cmp_object_as_str(const cmp_object_t *obj, uint32_t *size) {
     case CMP_TYPE_FIXSTR:
     case CMP_TYPE_STR8:
     case CMP_TYPE_STR16:
-    case CMP_TYPE_STR32:
+    case CMP_TYPE_STR32: {
       *size = obj->as.str_size;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86536,11 +87873,12 @@ bool cmp_object_as_bin(const cmp_object_t *obj, uint32_t *size) {
   switch (obj->type) {
     case CMP_TYPE_BIN8:
     case CMP_TYPE_BIN16:
-    case CMP_TYPE_BIN32:
+    case CMP_TYPE_BIN32: {
       *size = obj->as.bin_size;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86548,11 +87886,12 @@ bool cmp_object_as_array(const cmp_object_t *obj, uint32_t *size) {
   switch (obj->type) {
     case CMP_TYPE_FIXARRAY:
     case CMP_TYPE_ARRAY16:
-    case CMP_TYPE_ARRAY32:
+    case CMP_TYPE_ARRAY32: {
       *size = obj->as.array_size;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86560,11 +87899,12 @@ bool cmp_object_as_map(const cmp_object_t *obj, uint32_t *size) {
   switch (obj->type) {
     case CMP_TYPE_FIXMAP:
     case CMP_TYPE_MAP16:
-    case CMP_TYPE_MAP32:
+    case CMP_TYPE_MAP32: {
       *size = obj->as.map_size;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
@@ -86577,37 +87917,37 @@ bool cmp_object_as_ext(const cmp_object_t *obj, int8_t *type, uint32_t *size) {
     case CMP_TYPE_FIXEXT16:
     case CMP_TYPE_EXT8:
     case CMP_TYPE_EXT16:
-    case CMP_TYPE_EXT32:
+    case CMP_TYPE_EXT32: {
       *type = obj->as.ext.type;
       *size = obj->as.ext.size;
       return true;
+    }
     default:
-        return false;
+      return false;
   }
 }
 
 bool cmp_object_to_str(cmp_ctx_t *ctx, const cmp_object_t *obj, char *data,
                                                           uint32_t buf_size) {
-  uint32_t str_size = 0;
-
   switch (obj->type) {
     case CMP_TYPE_FIXSTR:
     case CMP_TYPE_STR8:
     case CMP_TYPE_STR16:
-    case CMP_TYPE_STR32:
-      str_size = obj->as.str_size;
+    case CMP_TYPE_STR32: {
+      const uint32_t str_size = obj->as.str_size;
       if (str_size >= buf_size) {
-        ctx->error = STR_DATA_LENGTH_TOO_LONG_ERROR;
+        ctx->error = CMP_ERROR_STR_DATA_LENGTH_TOO_LONG;
         return false;
       }
 
       if (!ctx->read(ctx, data, str_size)) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
 
       data[str_size] = 0;
       return true;
+    }
     default:
       return false;
   }
@@ -86615,30 +87955,28 @@ bool cmp_object_to_str(cmp_ctx_t *ctx, const cmp_object_t *obj, char *data,
 
 bool cmp_object_to_bin(cmp_ctx_t *ctx, const cmp_object_t *obj, void *data,
                                                           uint32_t buf_size) {
-  uint32_t bin_size = 0;
-
   switch (obj->type) {
     case CMP_TYPE_BIN8:
     case CMP_TYPE_BIN16:
-    case CMP_TYPE_BIN32:
-      bin_size = obj->as.bin_size;
+    case CMP_TYPE_BIN32: {
+      const uint32_t bin_size = obj->as.bin_size;
       if (bin_size > buf_size) {
-        ctx->error = BIN_DATA_LENGTH_TOO_LONG_ERROR;
+        ctx->error = CMP_ERROR_BIN_DATA_LENGTH_TOO_LONG;
         return false;
       }
 
       if (!ctx->read(ctx, data, bin_size)) {
-        ctx->error = DATA_READING_ERROR;
+        ctx->error = CMP_ERROR_DATA_READING;
         return false;
       }
       return true;
+    }
     default:
       return false;
   }
 }
 
 /* vi: set et ts=2 sw=2: */
-
 /*
  * Copyright © 2018 Zoff
  *
@@ -87907,8 +89245,8 @@ bool tox_util_friend_resend_message_v2(Tox *tox, uint32_t friend_number,
                                           (const uint8_t *)filename, (size_t)strlen(filename),
                                           &error_send);
 
+    free(msgid);
     if ((file_num_new == UINT32_MAX) || (error_send != TOX_ERR_FILE_SEND_OK)) {
-        free(msgid);
         return false;
     }
 
@@ -87990,8 +89328,9 @@ bool tox_util_friend_send_sync_message_v2(Tox *tox, uint32_t friend_number,
                                           (const uint8_t *)filename, (size_t)strlen(filename),
                                           &error_send);
 
+    free(msgid);
+
     if ((file_num_new == UINT32_MAX) || (error_send != TOX_ERR_FILE_SEND_OK)) {
-        free(msgid);
         return false;
     }
 
@@ -88187,13 +89526,13 @@ int64_t tox_util_friend_send_message_v2(Tox *tox, uint32_t friend_number, TOX_ME
                     }
                 }
 
-                free(raw_message);
-                free(msgid);
-
                 if (error) {
                     *error = TOX_ERR_FRIEND_SEND_MESSAGE_OK;
                 }
             }
+
+            free(raw_message);
+            free(msgid);
 
             return -1;
         } else {
