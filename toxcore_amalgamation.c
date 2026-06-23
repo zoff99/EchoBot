@@ -4677,6 +4677,18 @@ void kill_onion_announce(Onion_Announce *onion_a);
 #define C_TOXCORE_TOXCORE_GROUP_ONION_ANNOUNCE_H
 
 
+/**
+ * Maximum size of an announce response packet when the GCA extra-data callback
+ * is active.
+ *
+ * The 1 here is the `num_nodes` byte (`want_node_count=true`).
+ */
+#define GCA_ANNOUNCE_RESPONSE_MAX_SIZE \
+    (ONION_ANNOUNCE_RESPONSE_MIN_SIZE \
+     + 1 \
+     + MAX_SENT_NODES * PACKED_NODE_SIZE_IP6 \
+     + GCA_MAX_SENT_ANNOUNCES * GCA_ANNOUNCE_MAX_SIZE)
+
 non_null()
 void gca_onion_init(GC_Announces_List *group_announce, Onion_Announce *onion_a);
 
@@ -39116,6 +39128,17 @@ void sanctions_list_cleanup(Moderation *moderation)
 static_assert(GCA_ANNOUNCE_MAX_SIZE <= ONION_MAX_EXTRA_DATA_SIZE,
               "GC_Announce does not fit into the onion packet extra data");
 
+/**
+ * GCA responses are larger than ONION_ANNOUNCE_RESPONSE_MAX_SIZE because they
+ * include both the full packed-node list AND the GCA announce list.
+ * handle_announce_request_common must therefore allocate its output buffer
+ * dynamically (sized from the actual plaintext length), never from the old
+ * constant.
+ */
+static_assert(GCA_ANNOUNCE_RESPONSE_MAX_SIZE > ONION_ANNOUNCE_RESPONSE_MAX_SIZE,
+              "GCA_ANNOUNCE_RESPONSE_MAX_SIZE must exceed ONION_ANNOUNCE_RESPONSE_MAX_SIZE; data[] in handle_announce_request_common must be dynamically sized");
+
+
 static pack_extra_data_cb pack_group_announces;
 non_null()
 static int pack_group_announces(void *object, const Logger *logger, const Mono_Time *mono_time,
@@ -39165,7 +39188,7 @@ static int pack_group_announces(void *object, const Logger *logger, const Mono_T
 
 void gca_onion_init(GC_Announces_List *group_announce, Onion_Announce *onion_a)
 {
-    onion_announce_extra_data_callback(onion_a, GCA_MAX_SENT_ANNOUNCES * sizeof(GC_Announce), pack_group_announces,
+    onion_announce_extra_data_callback(onion_a, GCA_MAX_SENT_ANNOUNCES * GCA_ANNOUNCE_MAX_SIZE, pack_group_announces,
                                        group_announce);
 }
 
@@ -51080,12 +51103,28 @@ static int handle_announce_request_common(
 
     offset += extra_size;
 
-    uint8_t data[ONION_ANNOUNCE_RESPONSE_MAX_SIZE];
+    /* Allocate the output buffer to exactly fit the ciphertext we are about
+     * to produce.  Using a fixed constant here would be wrong: when the GCA
+     * extra-data callback is active, offset can exceed
+     * ONION_ANNOUNCE_RESPONSE_MAX_SIZE - 33, overflowing any static buffer
+     * sized from that constant. */
+    const uint16_t data_size = (uint16_t)(
+                                   1 + ONION_ANNOUNCE_SENDBACK_DATA_LENGTH + CRYPTO_NONCE_SIZE
+                                   + offset + CRYPTO_MAC_SIZE);
+    uint8_t *data = (uint8_t *)malloc(data_size);
+
+    if (data == nullptr) {
+        free(response);
+        free(plain);
+        return 1;
+    }
+
     const int len = encrypt_data_symmetric(shared_key, nonce, response, offset,
                                            data + 1 + ONION_ANNOUNCE_SENDBACK_DATA_LENGTH + CRYPTO_NONCE_SIZE);
 
     if (len != offset + CRYPTO_MAC_SIZE) {
         LOGGER_ERROR(onion_a->log, "Failed to encrypt announce response");
+        free(data);
         free(response);
         free(plain);
         return 1;
@@ -51099,11 +51138,13 @@ static int handle_announce_request_common(
     if (send_onion_response(onion_a->net, source, data,
                             1 + ONION_ANNOUNCE_SENDBACK_DATA_LENGTH + CRYPTO_NONCE_SIZE + len,
                             packet + (length - ONION_RETURN_3)) == -1) {
+        free(data);
         free(response);
         free(plain);
         return 1;
     }
 
+    free(data);
     free(response);
     free(plain);
     return 0;
@@ -52900,7 +52941,7 @@ static int handle_announce_response(void *object, const IP_Port *source, const u
 {
     Onion_Client *onion_c = (Onion_Client *)object;
 
-    if (length < ONION_ANNOUNCE_RESPONSE_MIN_SIZE || length > ONION_ANNOUNCE_RESPONSE_MAX_SIZE) {
+    if (length < ONION_ANNOUNCE_RESPONSE_MIN_SIZE || length > GCA_ANNOUNCE_RESPONSE_MAX_SIZE) {
         return 1;
     }
 
@@ -52913,7 +52954,7 @@ static int handle_announce_response(void *object, const IP_Port *source, const u
         return 1;
     }
 
-    uint8_t plain[1 + ONION_PING_ID_SIZE + ONION_ANNOUNCE_RESPONSE_MAX_SIZE - ONION_ANNOUNCE_RESPONSE_MIN_SIZE];
+    uint8_t plain[1 + ONION_PING_ID_SIZE + GCA_ANNOUNCE_RESPONSE_MAX_SIZE - ONION_ANNOUNCE_RESPONSE_MIN_SIZE];
     const int plain_size = 1 + ONION_PING_ID_SIZE + length - ONION_ANNOUNCE_RESPONSE_MIN_SIZE;
     int len;
 
@@ -81649,6 +81690,9 @@ VCSession *vc_new_h264(Logger *log, ToxAV *av, uint32_t friend_number, toxav_vid
     }
 
     vc->h264_decoder = avcodec_alloc_context3(codec);
+    // HINT: make sure this is set to NULL in start
+    vc->h264_decoder->extradata = NULL;
+    vc->h264_decoder->extradata_size = 0;
 
     if (codec) {
 #if LIBAVCODEC_VERSION_MAJOR < 60
@@ -81729,7 +81773,9 @@ VCSession *vc_new_h264(Logger *log, ToxAV *av, uint32_t friend_number, toxav_vid
         const uint8_t pps[] = {0x00, 0x00, 0x00, 0x01,      0x68, 0xCE, 0x38, 0x80};
         const size_t sps_pps_size = sizeof(sps) + sizeof(pps);
 
+        LOGGER_API_WARNING(av->tox, "setting up h264_mediacodec decoder: allocating vc->h264_decoder->extradata ...");
         vc->h264_decoder->extradata = (uint8_t *)av_mallocz(sps_pps_size + AV_INPUT_BUFFER_PADDING_SIZE);
+        LOGGER_API_WARNING(av->tox, "setting up h264_mediacodec decoder: allocating vc->h264_decoder->extradata ... DONE %p", (void*)vc->h264_decoder->extradata);
         vc->h264_decoder->extradata_size = sps_pps_size;
         // memset(&vc->h264_decoder->extradata[vc->h264_decoder->extradata_size], 0, AV_INPUT_BUFFER_PADDING_SIZE);
         memcpy(vc->h264_decoder->extradata, sps, sizeof(sps));
@@ -82753,6 +82799,8 @@ uint32_t send_frames_h264(ToxAV *av, uint32_t friend_number, uint16_t width, uin
 
 void vc_kill_h264(VCSession *vc)
 {
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h264");
+
     // encoder
     if (vc->x264_software_encoder_used == 1) {
         if (vc->h264_encoder) {
@@ -82765,14 +82813,18 @@ void vc_kill_h264(VCSession *vc)
         avcodec_free_context(&(vc->h264_encoder2));
         // --- ffmpeg encoder ---
     }
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h264: encoder killed");
 
     // decoder
-    if (vc->h264_decoder->extradata) {
-        av_free(vc->h264_decoder->extradata);
-        vc->h264_decoder->extradata = NULL;
+    if (vc->h264_decoder != nullptr) {
+        LOGGER_API_WARNING(vc->av->tox, "vc->h264_decoder->extradata %p size=%d", (void*)vc->h264_decoder->extradata, (int)vc->h264_decoder->extradata_size);
+        if ((vc->h264_decoder->extradata) && (vc->h264_decoder->extradata_size > 0)) {
+            av_free(vc->h264_decoder->extradata);
+            vc->h264_decoder->extradata = NULL;
+        }
+        avcodec_free_context(&vc->h264_decoder);
     }
-
-    avcodec_free_context(&vc->h264_decoder);
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h264: decoder killed");
 }
 
 
@@ -82907,6 +82959,8 @@ VCSession *vc_new_h265(Logger *log, ToxAV *av, uint32_t friend_number, toxav_vid
 
         vc->h265_decoder = avcodec_alloc_context3(codec);
         LOGGER_API_INFO(av->tox, "H265 decoder:h265_decoder=%p", (void *)vc->h265_decoder);
+        vc->h265_decoder->extradata = NULL;
+        vc->h265_decoder->extradata_size = 0;
 
         if (codec) {
 
@@ -83392,20 +83446,26 @@ uint32_t send_frames_h265(ToxAV *av, uint32_t friend_number, uint16_t width, uin
 
 void vc_kill_h265(VCSession *vc)
 {
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h265");
+
 #ifdef HAVE_H265_ENCODER
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h265: trying to kill encoder ...");
     // encoder
     vc_kill_encoder_h265(vc);
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h265: encoder killed");
 #endif
 
     // decoder
     if (vc->h265_decoder != nullptr) {
-        if (vc->h265_decoder->extradata) {
+        LOGGER_API_WARNING(vc->av->tox, "vc->h265_decoder->extradata %p size=%d", (void*)vc->h265_decoder->extradata, (int)vc->h265_decoder->extradata_size);
+        if ((vc->h265_decoder->extradata) && (vc->h265_decoder->extradata_size > 0)) {
             av_free(vc->h265_decoder->extradata);
             vc->h265_decoder->extradata = NULL;
         }
         avcodec_free_context(&vc->h265_decoder);
         vc->h265_decoder = NULL;
     }
+    LOGGER_API_WARNING(vc->av->tox, "vc_kill_h265: decoder killed");
 }
 
 /*
